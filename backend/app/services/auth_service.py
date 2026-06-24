@@ -21,8 +21,9 @@ async def register_user(payload: RegisterRequest, db: AsyncSession) -> TokenResp
     #creating a new user using the model
     new_user = User(
         full_name = payload.full_name,
-        email = payload_email,
-        hashed_password = hash_password(payload.password)
+        email = payload.email,
+        hashed_password = hash_password(payload.password),
+        #role=UserRole.admin  # first user is always admin
     )
 
     #changes in db

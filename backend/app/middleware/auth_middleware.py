@@ -3,7 +3,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
-from app.models.user import User
+from app.models.user import User, UserRole
+from app.models.team import Team
 from app.core.security import decode_access_token
 
 #pulls token string from the authorization header
@@ -48,3 +49,15 @@ async def get_current_user(
         )
     
     return user
+
+
+#role based access control for teams
+def require_role(*roles: UserRole):
+    async def role_checker(current_user: User = Depends(get_current_user)):
+        if current_user.role not in roles:
+            raise HTTPException(
+                status_code = status.HTTP_403_FORBIDDEN,
+                detail = "Insufficient permissions"
+            )
+        return current_user
+    return role_checker
