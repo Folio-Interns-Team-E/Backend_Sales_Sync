@@ -5,6 +5,9 @@ from passlib.context import CryptContext
 from app.config import settings
 
 #password hashing
+import logging
+# This forces passlib to ignore the bcrypt version checks and just use it
+logging.getLogger("passlib").setLevel(logging.ERROR)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 #jwt config
