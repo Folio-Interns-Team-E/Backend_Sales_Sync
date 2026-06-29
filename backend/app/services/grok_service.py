@@ -1,228 +1,349 @@
-# File: backend/app/services/grok_service.py
-# Copy this entire file as-is
-
-import logging
 import json
-from typing import Optional, Dict, Any
+import logging
+import re
+from typing import Any, Dict, Optional
+
 import httpx
+
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class GrokService:
-    """Service to call Grok API for ICP generation"""
-    
+    """
+    Service responsible for generating and refining ICPs using Groq LLM.
+    """
+
     BASE_URL = "https://api.groq.com/openai/v1"
     MODEL = "llama-3.3-70b-versatile"
-    
+
+    @staticmethod
+    async def _call_llm(prompt: str) -> Dict[str, Any]:
+        """
+        Internal helper to call Groq Chat Completions API.
+        """
+
+        payload = {
+            "model": GrokService.MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert B2B SaaS GTM strategist and ICP consultant. "
+                        "Always return valid JSON only. Never wrap JSON inside markdown."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            "temperature": 0.4,
+            "max_tokens": 1800,
+            "response_format": {
+                "type": "json_object"
+            }
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{GrokService.BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.grok_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                logger.error("Groq Status: %s", response.status_code)
+                logger.error("Groq Response: %s", response.text)
+                raise
+
+            result = response.json()
+
+            if "choices" not in result or len(result["choices"]) == 0:
+                raise ValueError("Groq returned no choices.")
+
+            content = result["choices"][0]["message"]["content"]
+
+            try:
+                return json.loads(content)
+
+            except json.JSONDecodeError:
+                logger.warning("Trying regex JSON extraction...")
+
+                match = re.search(r"\{.*\}", content, re.DOTALL)
+
+                if not match:
+                    raise ValueError(
+                        f"Model returned invalid JSON:\n{content}"
+                    )
+
+                return json.loads(match.group())
+
     @staticmethod
     async def generate_icp(
         product_description: str,
         target_market_description: str,
+        goals: str,
         product_name: Optional[str] = None,
-        company_description: Optional[str] = None
+        company_description: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Call Grok API to analyze product description and generate ICP
-        
-        Args:
-            product_description: What the product does
-            target_market_description: Who the ideal customer is
-            product_name: Name of product (optional)
-            company_description: Company info (optional)
-        
-        Returns:
-            Dict with:
-            - target_industries: List of industries
-            - company_size_range: Employee count range
-            - target_revenues: Revenue range
-            - decision_maker_titles: Job titles of decision makers
-            - pain_points: List of pain points the product solves
-            - key_characteristics: Other important characteristics
-            - analysis: Full text analysis
-        """
-        
-        # Build prompt for Grok
-        prompt = f"""You are an expert in identifying Ideal Customer Profiles (ICPs) for B2B SaaS products.
 
-Analyze the following product and target market description, and provide a detailed ICP analysis.
+        prompt = f"""
+You are a senior B2B SaaS Go-To-Market strategist.
 
-PRODUCT INFORMATION:
-{f"Product Name: {product_name}" if product_name else ""}
-Product Description: {product_description}
-{f"Company Description: {company_description}" if company_description else ""}
+Generate an Ideal Customer Profile (ICP).
 
-TARGET MARKET DESCRIPTION:
+=========================
+PRODUCT INFORMATION
+=========================
+
+Product Name:
+{product_name or "Not provided"}
+
+Product Description:
+{product_description}
+
+Company Description:
+{company_description or "Not provided"}
+
+=========================
+TARGET CUSTOMER
+=========================
+
 {target_market_description}
 
-Please provide your analysis in the following JSON format:
+=========================
+BUSINESS GOALS
+=========================
+
+{goals}
+
+Use the goals to influence your recommendations.
+
+For example:
+
+• Revenue Growth → prioritize high-value accounts.
+
+• Faster Sales Cycles → prioritize SMBs.
+
+• Enterprise Expansion → prioritize large companies.
+
+• Pipeline Growth → prioritize buyers with urgent pain points.
+
+Return ONLY JSON.
+Return EXACTLY this schema:
+
 {{
-    "target_industries": ["Industry1", "Industry2", "Industry3"],
-    "company_size_range": "X-Y employees" or "X+ employees",
-    "target_revenues": "Revenue range e.g. $1M-$10M",
-    "decision_maker_titles": ["Title1", "Title2", "Title3"],
-    "pain_points": ["Pain point 1", "Pain point 2", "Pain point 3"],
-    "key_characteristics": ["Characteristic 1", "Characteristic 2"],
-    "analysis": "Detailed paragraph explaining the ICP analysis"
+  "target_industries": [
+    ""
+  ],
+  "company_size_range": "",
+  "target_revenues": "",
+  "decision_maker_titles": [
+    ""
+  ],
+  "pain_points": [
+    ""
+  ],
+  "key_characteristics": [
+    ""
+  ],
+  "icp_summary": [
+    "",
+    "",
+    "",
+    "",
+    ""
+  ],
+  "analysis": ""
 }}
 
-IMPORTANT: Return ONLY valid JSON, no additional text."""
+Requirements:
+
+- target_industries: 5-8 industries
+- decision_maker_titles: 5-8 roles
+- pain_points: 6-10 pain points
+- key_characteristics: 6-10 characteristics
+- icp_summary: 5 concise bullet points summarizing the ICP
+- analysis: 2-4 detailed paragraphs
+
+Return valid JSON only.
+"""
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{GrokService.BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {settings.grok_api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": GrokService.MODEL,
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": prompt
-                            }
-                        ],
-                        "temperature": 0.7,
-                        "max_tokens": 1500
-                    },
-                    timeout=30.0
-                )
-                
-                response.raise_for_status()
-                result = response.json()
-                
-                # Extract content from response
-                if "choices" not in result or not result["choices"]:
-                    raise ValueError("Invalid Grok response: no choices")
-                
-                content = result["choices"][0]["message"]["content"]
-                
-                # Parse JSON from response
-                try:
-                    icp_data = json.loads(content)
-                except json.JSONDecodeError:
-                    # Try to extract JSON if Grok added extra text
-                    import re
-                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                    if json_match:
-                        icp_data = json.loads(json_match.group())
-                    else:
-                        logger.error(f"Could not parse Grok response: {content}")
-                        raise ValueError(f"Could not parse JSON from Grok response: {content}")
-                
-                logger.info(f"Successfully generated ICP via Grok")
-                
-                return {
-                    "target_industries": icp_data.get("target_industries", []),
-                    "company_size_range": icp_data.get("company_size_range"),
-                    "target_revenues": icp_data.get("target_revenues"),
-                    "decision_maker_titles": icp_data.get("decision_maker_titles", []),
-                    "pain_points": icp_data.get("pain_points", []),
-                    "key_characteristics": icp_data.get("key_characteristics", []),
-                    "analysis": icp_data.get("analysis", ""),
-                    "full_response": icp_data  # Store full response
-                }
-        
-        except httpx.HTTPError as e:
-            logger.error(f"Grok API error: {str(e)}")
-            raise ValueError(f"Failed to generate ICP: {str(e)}")
-        except Exception as e:
-            logger.error(f"Unexpected error in generate_icp: {str(e)}")
-            raise ValueError(f"Error generating ICP: {str(e)}")
+            icp_data = await GrokService._call_llm(prompt)
 
+            logger.info("Successfully generated ICP via Groq")
+
+            return {
+                "target_industries": icp_data.get(
+                    "target_industries", []
+                ),
+                "company_size_range": icp_data.get(
+                    "company_size_range"
+                ),
+                "target_revenues": icp_data.get(
+                    "target_revenues"
+                ),
+                "decision_maker_titles": icp_data.get(
+                    "decision_maker_titles", []
+                ),
+                "pain_points": icp_data.get(
+                    "pain_points", []
+                ),
+                "key_characteristics": icp_data.get(
+                    "key_characteristics", []
+                ),
+                "icp_summary": icp_data.get(
+                    "icp_summary", []
+                ),
+                "analysis": icp_data.get(
+                    "analysis", ""
+                ),
+                "full_response": icp_data,
+            }
+
+        except httpx.HTTPStatusError as e:
+            logger.error("Groq HTTP Error")
+            logger.error("Status Code: %s", e.response.status_code)
+            logger.error("Response: %s", e.response.text)
+
+            raise ValueError(
+                f"Groq API Error: {e.response.text}"
+            )
+
+        except Exception as e:
+            logger.exception("ICP generation failed")
+            raise ValueError(str(e))
 
     @staticmethod
     async def refine_icp(
         current_icp_data: Dict[str, Any],
-        refinement_request: str
+        refinement_request: str,
+        goals: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Refine existing ICP based on user feedback
-        
-        Args:
-            current_icp_data: Current ICP data
-            refinement_request: What the user wants to refine
-        
-        Returns:
-            Updated ICP data
-        """
-        
-        prompt = f"""You are an expert in refining Ideal Customer Profiles (ICPs).
 
-Current ICP Analysis:
-Industries: {current_icp_data.get('target_industries', [])}
-Company Size: {current_icp_data.get('company_size_range')}
-Decision Makers: {current_icp_data.get('decision_maker_titles', [])}
-Pain Points: {current_icp_data.get('pain_points', [])}
+        prompt = f"""
+You are an expert ICP consultant.
 
-User Refinement Request: {refinement_request}
+The user already has an ICP.
 
-Please provide an updated ICP analysis incorporating this feedback.
+Refine it based on the user's request.
 
-Return ONLY valid JSON in this format:
+Current ICP:
+
+Industries:
+{current_icp_data.get("target_industries", [])}
+
+Company Size:
+{current_icp_data.get("company_size_range")}
+
+Revenue:
+{current_icp_data.get("target_revenues")}
+
+Decision Makers:
+{current_icp_data.get("decision_maker_titles", [])}
+
+Pain Points:
+{current_icp_data.get("pain_points", [])}
+
+Characteristics:
+{current_icp_data.get("key_characteristics", [])}
+
+Summary:
+{current_icp_data.get("icp_summary", [])}
+
+Business Goals:
+{goals or "Not provided"}
+
+User refinement request:
+
+{refinement_request}
+
+Return ONLY valid JSON.
+Return EXACTLY this JSON schema:
+
 {{
-    "target_industries": [...],
-    "company_size_range": "...",
-    "target_revenues": "...",
-    "decision_maker_titles": [...],
-    "pain_points": [...],
-    "key_characteristics": [...],
-    "analysis": "Updated analysis..."
-}}"""
+  "target_industries": [
+    ""
+  ],
+  "company_size_range": "",
+  "target_revenues": "",
+  "decision_maker_titles": [
+    ""
+  ],
+  "pain_points": [
+    ""
+  ],
+  "key_characteristics": [
+    ""
+  ],
+  "icp_summary": [
+    "",
+    "",
+    "",
+    "",
+    ""
+  ],
+  "analysis": ""
+}}
+
+Requirements:
+
+- Preserve useful information from the existing ICP.
+- Modify only what is necessary based on the refinement request.
+- Ensure recommendations align with the business goals.
+- Return JSON only.
+"""
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{GrokService.BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {settings.grok_api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": GrokService.MODEL,
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": prompt
-                            }
-                        ],
-                        "temperature": 0.7,
-                        "max_tokens": 1500
-                    },
-                    timeout=30.0
-                )
-                
-                response.raise_for_status()
-                result = response.json()
-                
-                content = result["choices"][0]["message"]["content"]
-                
-                try:
-                    icp_data = json.loads(content)
-                except json.JSONDecodeError:
-                    import re
-                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                    if json_match:
-                        icp_data = json.loads(json_match.group())
-                    else:
-                        raise ValueError(f"Could not parse JSON from Grok response")
-                
-                logger.info(f"Successfully refined ICP via Grok")
-                
-                return {
-                    "target_industries": icp_data.get("target_industries", []),
-                    "company_size_range": icp_data.get("company_size_range"),
-                    "target_revenues": icp_data.get("target_revenues"),
-                    "decision_maker_titles": icp_data.get("decision_maker_titles", []),
-                    "pain_points": icp_data.get("pain_points", []),
-                    "key_characteristics": icp_data.get("key_characteristics", []),
-                    "analysis": icp_data.get("analysis", ""),
-                    "full_response": icp_data
-                }
-        
+            icp_data = await GrokService._call_llm(prompt)
+
+            logger.info("Successfully refined ICP via Groq")
+
+            return {
+                "target_industries": icp_data.get(
+                    "target_industries", []
+                ),
+                "company_size_range": icp_data.get(
+                    "company_size_range"
+                ),
+                "target_revenues": icp_data.get(
+                    "target_revenues"
+                ),
+                "decision_maker_titles": icp_data.get(
+                    "decision_maker_titles", []
+                ),
+                "pain_points": icp_data.get(
+                    "pain_points", []
+                ),
+                "key_characteristics": icp_data.get(
+                    "key_characteristics", []
+                ),
+                "icp_summary": icp_data.get(
+                    "icp_summary", []
+                ),
+                "analysis": icp_data.get(
+                    "analysis", ""
+                ),
+                "full_response": icp_data,
+            }
+
+        except httpx.HTTPStatusError as e:
+            logger.error("Groq HTTP Error")
+            logger.error("Status Code: %s", e.response.status_code)
+            logger.error("Response Body: %s", e.response.text)
+
+            raise ValueError(
+                f"Groq API Error: {e.response.text}"
+            )
+
         except Exception as e:
-            logger.error(f"Error refining ICP: {str(e)}")
-            raise ValueError(f"Failed to refine ICP: {str(e)}")
+            logger.exception("ICP refinement failed")
+            raise ValueError(str(e))

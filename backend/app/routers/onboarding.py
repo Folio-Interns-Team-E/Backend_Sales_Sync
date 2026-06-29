@@ -45,6 +45,7 @@ async def create_icp(
             user_id=current_user.id,
             product_description=request.product_description,
             target_market_description=request.target_customer,
+            goals=request.goals,
             product_name=request.product_name
         )
         

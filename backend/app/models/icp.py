@@ -1,5 +1,5 @@
 # File: backend/app/models/icp.py
-# Copy this entire file as-is
+# UPDATED VERSION - Replace existing file
 
 from sqlalchemy import Column, String, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.dialects.postgresql import UUID, ARRAY
@@ -25,6 +25,7 @@ class ICP(Base):
     product_description = Column(Text, nullable=True)
     company_description = Column(Text, nullable=True)
     target_market_description = Column(Text, nullable=True)
+    goals = Column(Text, nullable=True)  # NEW: What should the sales copilot optimize for?
     
     # Generated ICP Fields (from Grok)
     target_industries = Column(ARRAY(String), default=[])  # e.g., ["Technology", "SaaS", "B2B"]
@@ -36,6 +37,9 @@ class ICP(Base):
     
     # Geography/Location
     target_regions = Column(ARRAY(String), default=[])  # e.g., ["North America", "Europe"]
+    
+    # ICP Summary (for frontend display) - NEW
+    icp_summary = Column(ARRAY(String), default=[])  # List of 5-7 key ICP characteristics for preview
     
     # Grok Response (raw AI data)
     grok_full_response = Column(JSON, nullable=True)  # Store full Grok response for debugging
