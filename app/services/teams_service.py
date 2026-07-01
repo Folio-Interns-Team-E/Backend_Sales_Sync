@@ -88,6 +88,12 @@ async def invite_member(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User must register before they can be added to a team"
+        )
+
+    if user.team_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="User is already part of a team"
         )
     
@@ -96,9 +102,13 @@ async def invite_member(
     user.role = UserRole.rep
 
     await db.commit()
-    await db.refresh(user)
 
-    return {"message": f"{user.full_name} added to team"}
+    result = await db.execute(
+        select(Team)
+        .options(selectinload(Team.members))
+        .where(Team.id == current_user.team_id)
+    )
+    return result.scalar_one()
 
 #join existing team
 async def join_existing_team(
@@ -129,9 +139,13 @@ async def join_existing_team(
     current_user.role = UserRole.rep
 
     await db.commit()
-    await db.refresh(current_user)
 
-    return {"message": f"Successfully joined {team.name}"}
+    result = await db.execute(
+        select(Team)
+        .options(selectinload(Team.members))
+        .where(Team.id == team.id)
+    )
+    return result.scalar_one()
 
 #update member role
 async def update_member_role(
@@ -170,7 +184,12 @@ async def update_member_role(
     await db.commit()
     await db.refresh(user)
 
-    return {"message": f"Role updated to {payload.role.value}"}
+    result = await db.execute(
+        select(Team)
+        .options(selectinload(Team.members))
+        .where(Team.id == team_id)
+    )
+    return result.scalar_one()
 
 #remove team member
 async def remove_member(
@@ -208,7 +227,12 @@ async def remove_member(
 
     await db.commit()
 
-    return {"message": f"{user.full_name} removed from team"}
+    result = await db.execute(
+        select(Team)
+        .options(selectinload(Team.members))
+        .where(Team.id == team_id)
+    )
+    return result.scalar_one()
 
 #get team invite code
 async def get_team_invite_code(

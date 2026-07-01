@@ -23,6 +23,8 @@ class GrokService:
         """
         Internal helper to call Groq Chat Completions API.
         """
+        if not settings.grok_api_key:
+            raise ValueError("GROK_API_KEY is not configured.")
 
         payload = {
             "model": GrokService.MODEL,
@@ -176,6 +178,13 @@ Requirements:
 Return valid JSON only.
 """
 
+        if not settings.grok_api_key:
+            return GrokService._fallback_icp(
+                product_description=product_description,
+                target_market_description=target_market_description,
+                goals=goals,
+            )
+
         try:
             icp_data = await GrokService._call_llm(prompt)
 
@@ -302,6 +311,13 @@ Requirements:
 - Return JSON only.
 """
 
+        if not settings.grok_api_key:
+            return GrokService._fallback_icp(
+                product_description=current_icp_data.get("product_description", ""),
+                target_market_description=", ".join(current_icp_data.get("target_industries", [])),
+                goals=goals or refinement_request,
+            )
+
         try:
             icp_data = await GrokService._call_llm(prompt)
 
@@ -347,3 +363,50 @@ Requirements:
         except Exception as e:
             logger.exception("ICP refinement failed")
             raise ValueError(str(e))
+
+    @staticmethod
+    def _fallback_icp(
+        product_description: str,
+        target_market_description: str,
+        goals: str,
+    ) -> Dict[str, Any]:
+        target = target_market_description or "B2B revenue teams"
+        goal_text = goals or "faster sales execution"
+        return {
+            "target_industries": ["B2B SaaS", "Technology Services", "Revenue Operations"],
+            "company_size_range": "20-500 employees",
+            "target_revenues": "$1M-$50M",
+            "decision_maker_titles": [
+                "VP of Sales",
+                "Head of Revenue Operations",
+                "Chief Revenue Officer",
+                "Founder",
+                "Sales Operations Manager",
+            ],
+            "pain_points": [
+                "Fragmented prospect research",
+                "Slow discovery-to-proposal handoff",
+                "Inconsistent follow-up",
+                "Low visibility into buying context",
+                "Manual sales administration",
+            ],
+            "key_characteristics": [
+                target,
+                "Active outbound sales motion",
+                "Multiple sales tools in use",
+                "Need for repeatable sales process",
+                "Clear ownership of revenue targets",
+            ],
+            "icp_summary": [
+                target,
+                f"Clear pain around {goal_text.lower()}",
+                "Sales, RevOps, founder, or GTM leadership buyer",
+                "Teams that need faster and more consistent follow-up",
+                "Companies where contextual proposal quality affects conversion",
+            ],
+            "analysis": (
+                "Generated locally because GROK_API_KEY is not configured. "
+                f"The ICP is based on the submitted product context: {product_description}"
+            ),
+            "full_response": {"source": "local_fallback"},
+        }

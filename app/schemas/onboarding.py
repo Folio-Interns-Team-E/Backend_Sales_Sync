@@ -71,6 +71,7 @@ class OnboardingResponse(BaseModel):
     success: bool
     message: str
     icp: Optional[ICPResponse] = None
+    grok_analysis: Optional[str] = None
     
     model_config = ConfigDict(from_attributes=True)
 
