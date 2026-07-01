@@ -1,6 +1,8 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
+import ssl
+ssl_context = ssl.create_default_context()
 
 
 # base class all models inherit from
@@ -12,8 +14,10 @@ class Base(DeclarativeBase):
 engine = create_async_engine(
     settings.database_url,
     echo=settings.app_env == "development",  # logs SQL queries in dev only
-    pool_size=10,
-    max_overflow=20
+    connect_args={
+        "ssl": ssl_context
+    }
+
 )
 
 # session factory
