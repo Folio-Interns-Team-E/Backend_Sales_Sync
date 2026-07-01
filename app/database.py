@@ -1,34 +1,38 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
-import ssl
-ssl_context = ssl.create_default_context()
 
 
-# base class all models inherit from
+# Base class that all models inherit from
 class Base(DeclarativeBase):
     pass
 
 
-# async engine — handles the actual connection to PostgreSQL
+# Only enable SSL in production
+connect_args = {}
+
+if settings.app_env == "production":
+    import ssl
+    connect_args["ssl"] = ssl.create_default_context()
+
+
+# Async engine — handles the actual connection to PostgreSQL
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.app_env == "development",  # logs SQL queries in dev only
-    connect_args={
-        "ssl": ssl_context
-    }
-
+    echo=settings.app_env == "development",  # logs SQL queries in development
+    connect_args=connect_args,
 )
 
-# session factory
+
+# Session factory
 SessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
-    expire_on_commit=False
+    expire_on_commit=False,
 )
 
 
-# dependency — used in routers via Depends(get_db)
+# Dependency — used in routers via Depends(get_db)
 async def get_db():
     async with SessionLocal() as session:
         try:
