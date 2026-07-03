@@ -1,5 +1,8 @@
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.routers import auth, teams, onboarding
@@ -9,47 +12,92 @@ from app.config import settings
 
 # Import ALL models so SQLAlchemy creates every table on startup
 from app.models import team, user, icp  # noqa: F401
-from app.models.lead import Lead         # noqa: F401
+from app.models.lead import Lead  # noqa: F401
 
 app = FastAPI(
-    title="SalesSync AI — Backend",
+    title="AI Sales Pipeline Agent",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
-# ── CORS ─────────────────────────────────────────────────────────────────────
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",   # Vite default
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=settings.frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Routers ───────────────────────────────────────────────────────────────────
+# Routers
 app.include_router(auth.router)
 app.include_router(teams.router)
 app.include_router(onboarding.router)
 app.include_router(leads_router)
 
-# ── Startup ───────────────────────────────────────────────────────────────────
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "message": "Request failed",
+            "data": None,
+            "error": exc.detail,
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "message": "Validation failed",
+            "data": None,
+            "error": jsonable_encoder(exc.errors()),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "message": "Internal server error",
+            "data": None,
+            "error": str(exc) if settings.app_env == "development" else "Internal server error",
+        },
+    )
+
+
 @app.on_event("startup")
 async def startup():
     async with engine.begin() as conn:
-        await conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_subject TEXT"))
-        await conn.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_body TEXT"))
         await conn.run_sync(Base.metadata.create_all)
 
+        await conn.execute(
+            text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_subject TEXT")
+        )
+        await conn.execute(
+            text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS email_body TEXT")
+        )
 
-# ── Health ────────────────────────────────────────────────────────────────────
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "env": settings.app_env}
+    return {
+        "success": True,
+        "message": "API is healthy",
+        "data": {"status": "ok", "env": settings.app_env},
+        "error": None,
+    }
 
 
 @app.get("/")

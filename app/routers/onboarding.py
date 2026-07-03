@@ -12,6 +12,7 @@ from app.schemas.onboarding import (
     ICPResponse,
     ICPUpdate,
 )
+from app.schemas.common import ApiResponse
 from app.services.onboarding_service import OnboardingService
 import logging
 
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
-@router.post("/icp", response_model=OnboardingResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/icp", response_model=ApiResponse[OnboardingResponse], status_code=status.HTTP_201_CREATED)
 async def create_icp(
     request: OnboardingRequest,
     db: AsyncSession = Depends(get_db),
@@ -51,12 +52,13 @@ async def create_icp(
         
         logger.info(f"Created/Updated ICP for user {current_user.id}")
         
-        return OnboardingResponse(
+        response = OnboardingResponse(
             success=True,
             message="ICP generated successfully",
-            icp=ICPResponse.from_orm(icp),
+            icp=ICPResponse.model_validate(icp),
             grok_analysis=icp.grok_analysis
         )
+        return ApiResponse(success=True, message=response.message, data=response)
     
     except ValueError as e:
         logger.error(f"ValueError in create_icp: {str(e)}")
@@ -64,6 +66,8 @@ async def create_icp(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating ICP: {str(e)}")
         raise HTTPException(
@@ -72,7 +76,7 @@ async def create_icp(
         )
 
 
-@router.get("/icp", response_model=ICPResponse)
+@router.get("/icp", response_model=ApiResponse[ICPResponse])
 async def get_icp(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -97,10 +101,14 @@ async def get_icp(
             detail="ICP not found. Please create one by POSTing to /onboarding/icp"
         )
     
-    return ICPResponse.from_orm(icp)
+    return ApiResponse(
+        success=True,
+        message="ICP fetched successfully",
+        data=ICPResponse.model_validate(icp),
+    )
 
 
-@router.put("/icp", response_model=ICPResponse)
+@router.put("/icp", response_model=ApiResponse[ICPResponse])
 async def update_icp(
     icp_update: ICPUpdate,
     db: AsyncSession = Depends(get_db),
@@ -131,7 +139,11 @@ async def update_icp(
             )
         
         logger.info(f"Updated ICP for user {current_user.id}")
-        return ICPResponse.from_orm(updated_icp)
+        return ApiResponse(
+            success=True,
+            message="ICP updated successfully",
+            data=ICPResponse.model_validate(updated_icp),
+        )
     
     except ValueError as e:
         logger.error(f"ValueError in update_icp: {str(e)}")
@@ -139,6 +151,8 @@ async def update_icp(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error updating ICP: {str(e)}")
         raise HTTPException(
@@ -147,7 +161,7 @@ async def update_icp(
         )
 
 
-@router.get("/status", response_model=dict)
+@router.get("/status", response_model=ApiResponse[dict])
 async def get_onboarding_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -163,14 +177,14 @@ async def get_onboarding_status(
     service = OnboardingService(db)
     status_data = await service.get_onboarding_status(current_user.id)
     
-    return {
+    return ApiResponse(success=True, message="Onboarding status fetched successfully", data={
         "status": status_data["status"],
         "completed": status_data["completed"],
-        "icp": ICPResponse.from_orm(status_data["icp"]) if status_data["icp"] else None
-    }
+        "icp": ICPResponse.model_validate(status_data["icp"]) if status_data["icp"] else None
+    })
 
 
-@router.delete("/icp", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/icp", response_model=ApiResponse[dict])
 async def delete_icp(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -188,4 +202,4 @@ async def delete_icp(
         )
     
     logger.info(f"Deleted ICP for user {current_user.id}")
-    return None
+    return ApiResponse(success=True, message="ICP deleted successfully", data={})
