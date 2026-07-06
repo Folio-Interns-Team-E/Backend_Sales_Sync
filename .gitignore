@@ -1,0 +1,76 @@
+# environment
+.env
+.env.*
+!.env.example
+
+.venv
+
+# python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+.installed.cfg
+
+# virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# alembic
+migrations/versions/*.pyc
+
+# ide
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# docker
+*.log
+
+# aws
+.aws/
+
+# pinecone / ml
+*.pkl
+*.model
+
+# node (for react frontend later)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.next/
+out/
+build/
+
+# uploads / generated files
+uploads/
+generated/
+*.pdf
+*.docx
+
+# uv
+.uv/
+.python-version
