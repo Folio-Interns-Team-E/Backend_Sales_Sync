@@ -31,10 +31,3 @@ class User(Base):
         cascade="all, delete-orphan"
     )
 
-    # your existing relation
-    icp = relationship(
-        "ICP",
-        back_populates="user",
-        uselist=False,
-        cascade="all, delete-orphan"
-    )

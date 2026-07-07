@@ -3,10 +3,10 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from app.routers import auth, teams, onboarding
+from app.routers import auth, teams, onboarding, leads, emails, meetings, proposals, knowledge_base
 from app.database import engine, Base
 from app.config import settings
-from app.models import team, user, icp
+from app.models import team, user
 
 app = FastAPI(
     title="AI Sales Pipeline Agent",
@@ -28,6 +28,11 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(teams.router)
 app.include_router(onboarding.router)
+app.include_router(leads.router)
+app.include_router(emails.router)
+app.include_router(meetings.router)
+app.include_router(proposals.router)
+app.include_router(knowledge_base.router)
 
 
 @app.exception_handler(HTTPException)

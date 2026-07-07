@@ -13,9 +13,10 @@ class Team(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=False)
 
+    icp = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # 🔥 invite system
+   
     invite_code = Column(
         String,
         unique=True,
@@ -23,9 +24,14 @@ class Team(Base):
         default=lambda: secrets.token_urlsafe(8)
     )
 
-    # 🔥 members via relationship table
+  
     members = relationship(
         "TeamMember",
         back_populates="team",
         cascade="all, delete-orphan"
     )
+    leads = relationship("Lead", back_populates="team")
+  
+    proposals = relationship("Proposal", back_populates="team")
+    proposal_templates = relationship("ProposalTemplate", back_populates="team")
+    knowledge_assets = relationship("KnowledgeAsset", back_populates="team")
