@@ -27,11 +27,9 @@ class EmailService:
         team = result.scalar_one_or_none()
         return team
 
-    async def list_emails(self, user_id: UUID, lead_id: Optional[UUID] = None):
+    async def list_emails(self, user_id: UUID, lead_id: UUID):
         team = await self._get_user_team(user_id)
-        query = select(Email).where(Email.team_id == team.id)
-        if lead_id:
-            query = query.where(Email.lead_id == lead_id)
+        query = select(Email).where(Email.lead_id == lead_id)
         query = query.order_by(desc(Email.sent_at))
         result = await self.db.execute(query)
         return result.scalars().all()
@@ -47,7 +45,7 @@ class EmailService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
         email = Email(
-            team_id=team.id,
+           
             lead_id=lead_id,
             subject=subject,
             body=body,
@@ -64,7 +62,7 @@ class EmailService:
     async def draft_email(self, user_id: UUID, lead_id: UUID, subject: str, body: str):
         team = await self._get_user_team(user_id)
         email = Email(
-            team_id=team.id,
+          
             lead_id=lead_id,
             subject=subject,
             body=body,

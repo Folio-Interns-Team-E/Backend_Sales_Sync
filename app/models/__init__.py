@@ -6,6 +6,7 @@ from app.models.email import Email, EmailStatus
 from app.models.meeting import Meeting, MeetingStatus
 from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome, ProposalTemplate, ProposalRevision
 from app.models.knowledge_base import KnowledgeAsset
+from app.models.chat import ChatMessage, ChatRole
 
 
 __all__ = [
@@ -25,4 +26,6 @@ __all__ = [
     "ProposalTemplate",
     "ProposalRevision",
     "KnowledgeAsset",
+    "ChatMessage",
+    "ChatRole",
 ]

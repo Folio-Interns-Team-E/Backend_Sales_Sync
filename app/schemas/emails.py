@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
+from app.models.email import EmailStatus
 
 
 class EmailCreate(BaseModel):
@@ -16,8 +17,9 @@ class EmailResponse(BaseModel):
     lead_id: UUID
     subject: str
     body: str
-    status: str
-    sent_at: Optional[datetime] = None
-    created_at: datetime
+    status: EmailStatus
+    # 🔧 Change this from created_at to sent_at (or make it optional)
+    sent_at: datetime | None = None 
+    ai_metadata: dict
 
     model_config = ConfigDict(from_attributes=True)
