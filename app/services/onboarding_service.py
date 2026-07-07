@@ -1,10 +1,8 @@
 import logging
 from typing import Optional
 from uuid import UUID
-import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 from app.models.team import Team
 from app.models.team_member import TeamMember
@@ -32,16 +30,9 @@ class OnboardingService:
                                  goals: str) -> str:
         team = await self._get_user_team(user_id)
 
-        icp_text = json.dumps({
-            "productName": product_name or "",
-            "productDescription": product_description,
-            "targetCustomer": target_customer,
-            "goals": goals,
-        })
-
-        team.icp = icp_text
+        team.icp = product_description
         await self.db.commit()
-        return icp_text
+        return product_description
 
     async def get_onboarding(self, user_id: UUID) -> dict:
         team = await self._get_user_team(user_id)
@@ -59,16 +50,7 @@ class OnboardingService:
         if not team.icp:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No ICP found")
 
-        current = json.loads(team.icp)
-        if product_name is not None:
-            current["productName"] = product_name
         if product_description is not None:
-            current["productDescription"] = product_description
-        if target_customer is not None:
-            current["targetCustomer"] = target_customer
-        if goals is not None:
-            current["goals"] = goals
-
-        team.icp = json.dumps(current)
+            team.icp = product_description
         await self.db.commit()
         return team.icp

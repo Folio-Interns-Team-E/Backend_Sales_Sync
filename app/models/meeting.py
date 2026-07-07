@@ -17,8 +17,17 @@ class Meeting(Base):
     __tablename__ = "meetings"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    
 
+    team_id = Column(
+        UUID(as_uuid=True), 
+        ForeignKey("teams.id", ondelete="CASCADE"), 
+        nullable=False, 
+        index=True
+    )
+    client = Column(String, nullable=False)
+    company = Column(String, nullable=True)
+    duration = Column(String, default="30 minutes", nullable=False)
+    
     
     # 🔗 Links to the lead (Using SET NULL so if a lead is deleted, the historical meeting records remain)
     lead_id = Column(
