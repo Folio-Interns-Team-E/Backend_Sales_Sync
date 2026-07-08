@@ -32,7 +32,7 @@ class Team(Base):
     )
     leads = relationship("Lead", back_populates="team")
   
-    proposals = relationship("Proposal", back_populates="team")
+
     proposal_templates = relationship("ProposalTemplate", back_populates="team")
     knowledge_assets = relationship("KnowledgeAsset", back_populates="team")
     chat_messages = relationship("ChatMessage", back_populates="team", cascade="all, delete-orphan")

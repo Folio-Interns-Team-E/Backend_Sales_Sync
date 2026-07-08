@@ -1,33 +1,24 @@
 import logging
 import traceback
-import json
-import re
 from uuid import UUID
-
-import httpx
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
-from sqlalchemy import String
+from sqlalchemy import select
 
-from app.config import settings
 from app.models.team import Team
 from app.models.team_member import TeamMember
 from app.models.chat import ChatMessage, ChatRole
-from app.models.leads_pool import LeadPool
 from app.models.lead import Lead, LeadStatus
+from app.models.meeting import Meeting, MeetingStatus
+from app.services.chat_agents import ChatAgentsService
+from app.services.calcom_service import CalComService
 
 
 logger = logging.getLogger(__name__)
 
 
-class ChatService:
-
-    BASE_URL = "https://api.groq.com/openai/v1"
-    MODEL = "llama-3.3-70b-versatile"
-
-    def __init__(self, db: AsyncSession):
-        self.db = db
+class ChatService(ChatAgentsService):
 
     async def _get_user_team(self, user_id: UUID):
         result = await self.db.execute(
@@ -58,242 +49,7 @@ class ChatService:
         team = await self._get_user_team(user_id)
         return team.icp if team.icp else "No ICP available"
 
-    # =====================================================
-    # LEAD SEARCH FUNCTION (Kept exactly as original)
-    # =====================================================
-    async def search_leads(self, filters: dict, limit: int = 20):
-        conditions = []
 
-        keywords = filters.get("keywords", [])
-        industries = filters.get("industry", [])
-        countries = filters.get("country", [])
-
-        # Search titles + keywords + company
-        for word in keywords:
-            conditions.append(LeadPool.title.ilike(f"%{word}%"))
-            conditions.append(LeadPool.company_name.ilike(f"%{word}%"))
-            conditions.append(LeadPool.raw_data.cast(String).ilike(f"%{word}%"))
-
-        if industries:
-            for industry in industries:
-                conditions.append(LeadPool.industry.ilike(f"%{industry}%"))
-
-        if countries:
-            for country in countries:
-                conditions.append(LeadPool.country.ilike(f"%{country}%"))
-
-        query = select(LeadPool).where(or_(*conditions)).limit(limit)
-
-        result = await self.db.execute(query)
-        leads = result.scalars().all()
-
-        return leads
-
-    # =====================================================
-    # NEW: AI FIT SCORING GENERATOR
-    # =====================================================
-    async def _generate_fit_score(self, lead_info: dict, icp: str) -> dict:
-        """Compares a fetched lead profile against the ICP to yield an objective score."""
-        prompt = f"""You are an expert sales operations analyst. Evaluate the target lead data against the company's Ideal Customer Profile (ICP).
-
-                Company ICP:
-                \"\"\"
-                {icp}
-                \"\"\"
-
-                Target Lead Data:
-                \"\"\"
-                {json.dumps(lead_info, indent=2)}
-                \"\"\"
-
-                Provide an objective analysis. Return ONLY a valid JSON object matching this schema:
-                {{
-                    "score": 85,
-                    "justification": "A clear, concise 2-sentence explanation of why they received this score based on the ICP context."
-                }}
-                """
-        payload = {
-            "model": self.MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": 300,
-            "response_format": {"type": "json_object"}
-        }
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.grok_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"].strip()
-            
-            cleaned = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.IGNORECASE)
-            parsed = json.loads(cleaned)
-            
-            # 🔍 Debug log to inspect raw LLM behavior in your console
-            logger.info(f"Raw LLM Qualification Output: {parsed}")
-            
-            # Extract score safely even if the LLM names it 'fit_score' or returns a string
-            raw_score = parsed.get("score") or parsed.get("fit_score") or 0
-            try:
-                score_val = int(raw_score)
-            except (ValueError, TypeError):
-                score_val = 0
-                
-            return {
-                "score": score_val,
-                "justification": parsed.get("justification", "No evaluation details provided.")
-            }
-        
-
-    # =====================================================
-    # AI CUSTOM EMAIL GENERATOR
-    # =====================================================
-    async def _generate_custom_email(self, lead_info: dict, icp: str) -> dict:
-        """Generates a highly customized outreach email draft based on lead data and ICP."""
-        prompt = f"""You are an elite B2B sales development representative. Write a highly tailored, personalized cold outreach email to the target lead below based on our company's Ideal Customer Profile (ICP).
-
-                Company ICP Context:
-                \"\"\"
-                {icp}
-                \"\"\"
-
-                Target Lead Data:
-                \"\"\"
-                {json.dumps(lead_info, indent=2)}
-                \"\"\"
-
-                Guidelines:
-                1. Make it professional, relevant, and short (under 150 words).
-                2. Directly hook their specific role, company, or background data.
-                3. Do not use generic placeholders.
-
-                Return ONLY a valid JSON object matching this schema:
-                {{
-                    "subject": "Compelling, short email subject line",
-                    "body": "The personalized body text of the email."
-                }}
-                """
-        payload = {
-            "model": self.MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,  # slightly higher for creative writing variance
-            "max_tokens": 500,
-            "response_format": {"type": "json_object"}
-        }
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.grok_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"].strip()
-            cleaned = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.IGNORECASE)
-            return json.loads(cleaned)
-    # =====================================================
-    # ENHANCED AI PROMPT WITH ANALYZE ACTION ADDED
-    # =====================================================
-    async def extract_action(self, message: str, icp: str) -> dict:
-        prompt = f"""You are a B2B sales AI routing assistant. Your job is to classify the user's intent and extract matching parameters.
-
-                Current Company ICP:
-                \"\"\"
-                {icp}
-                \"\"\"
-
-                You must respond ONLY with a valid JSON object matching this schema:
-                {{
-                    "action": "UPDATE_ICP" | "GET_LEADS" | "ANALYZE_LEAD" | "DRAFT_EMAIL" | "NORMAL",
-                    "parameters": {{
-                        "new_icp": "string (only used for UPDATE_ICP)",
-                        "keywords": ["list", "of", "titles/roles/queries/names (used for GET_LEADS, ANALYZE_LEAD, or DRAFT_EMAIL)"],
-                        "industry": ["list", "of", "industries (only used for GET_LEADS)"],
-                        "country": ["list", "of", "countries (only used for GET_LEADS)"],
-                        "limit": int (default 20, max 50)
-                    }}
-                }}
-
-                Intent Rules:
-                1. UPDATE_ICP: When the user explicitly wants to update, rewrite, change, or modify their Ideal Customer Profile (ICP).
-                2. GET_LEADS: When the user wants to search, pull, find, or look up prospects broadly.
-                3. ANALYZE_LEAD: When the user explicitly names a specific person or company to analyze or qualify.
-                4. DRAFT_EMAIL: When the user asks to write, draft, generate, or compose an email to a specific person or lead name (e.g., "write an email to Dharmesh Shah", "draft a message for Elon Musk"). Put the person's name in the "keywords" array parameter.
-                5. NORMAL: For general questions or conversational small talk.
-
-                Examples:
-
-                User: "Find SaaS founders in America"
-                Output: {{"action": "GET_LEADS", "parameters": {{"keywords": ["founder", "CEO"], "industry": ["SaaS"], "country": ["USA"], "limit": 20}}}}
-
-                User: "analyze Dharmesh Shah"
-                Output: {{"action": "ANALYZE_LEAD", "parameters": {{"keywords": ["Dharmesh Shah"], "limit": 1}}}}
-
-                User: "Change my target market to healthcare startups"
-                Output: {{"action": "UPDATE_ICP", "parameters": {{"new_icp": "Healthcare startups"}} }}
-
-                User: "draft an email to Dharmesh Shah"
-                Output: {{"action": "DRAFT_EMAIL", "parameters": {{"keywords": ["Dharmesh Shah"], "limit": 1}}}}
-
-                User message:
-                "{message}"
-                """
-
-        payload = {
-            "model": self.MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": 500,
-            "response_format": {"type": "json_object"}
-        }
-
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.grok_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            raw_content = data["choices"][0]["message"]["content"]
-            
-            cleaned_content = re.sub(r"^```json\s*|\s*```$", "", raw_content.strip(), flags=re.IGNORECASE)
-            return json.loads(cleaned_content)
-
-
-    async def search_current_leads_by_name(self, team_id: UUID, name_keywords: list, limit: int = 1):
-        """Searches the permanent Lead table for a lead matching the team_id and name."""
-        if not name_keywords:
-            return []
-            
-        conditions = []
-        for keyword in name_keywords:
-            conditions.append(Lead.name.ilike(f"%{keyword}%"))
-            
-        query = (
-            select(Lead)
-            .where(Lead.team_id == team_id, or_(*conditions))
-            .limit(limit)
-        )
-        
-        result = await self.db.execute(query)
-        return result.scalars().all()
-    
-    
     
     # =====================================================
     # MAIN CHAT ROUTER
@@ -316,6 +72,10 @@ class ChatService:
             ai_response = await self.extract_action(message, icp)
             action = ai_response.get("action", "NORMAL")
             params = ai_response.get("parameters", {})
+
+            print("==================AI ACTION==================")
+            print(ai_response)
+            print("==================AI ACTION==================")
 
             if action == "UPDATE_ICP":
                 new_icp = params.get("new_icp", "").strip()
@@ -444,6 +204,79 @@ class ChatService:
                         f"--- \n"
                         f"{body}\n"
                     )
+
+            elif action == "CREATE_MEETING":
+                name_keywords = params.get("keywords", [])
+                start_time_str = params.get("start_time")
+                
+                current_leads = await self.search_current_leads_by_name(team.id, name_keywords, limit=1)
+                
+                if not current_leads:
+                    target_name = name_keywords[0] if name_keywords else "the requested prospect"
+                    response = f"Could not find any lead named '{target_name}' in your workspace to schedule a meeting with."
+                elif not start_time_str:
+                    response = "I recognized you wanted to book a meeting, but I couldn't isolate a clean time or date context. Could you please specify a time?"
+                else:
+                    existing_lead = current_leads[0]
+                    start_time_dt = datetime.fromisoformat(start_time_str)
+                    
+                    cal_service = CalComService(self.db)
+                    booking_info = await cal_service.create_booking(
+                        lead_id=existing_lead.id,
+                        start_time=start_time_dt,
+                        name=existing_lead.name,
+                        email=existing_lead.email,
+                        agenda=[f"AI Agent Automated Demo Routing with {existing_lead.company_name}"]
+                    )
+                    
+                    response = (
+                        f"### 📅 Meeting Scheduled Successfully!\n"
+                        f"**Attendee:** {existing_lead.name} ({existing_lead.email})\n"
+                        f"**Time:** {start_time_dt.strftime('%Y-%m-%d %I:%M %p')} (Asia/Karachi)\n"
+                        f"**Cal.com Booking UID:** `{booking_info['cal_booking_uid']}`\n\n"
+                        f"*The event has been securely updated in Cal.com and synced locally to your pipeline tracker.*"
+                    )
+
+            # =====================================================
+            # ACTION SUBROUTINE: CANCEL_MEETING
+            # =====================================================
+            elif action == "CANCEL_MEETING":
+                name_keywords = params.get("keywords", [])
+                current_leads = await self.search_current_leads_by_name(team.id, name_keywords, limit=1)
+                
+                if not current_leads:
+                    target_name = name_keywords[0] if name_keywords else "the requested prospect"
+                    response = f"Could not find any lead named '{target_name}' in your current pipeline records."
+                else:
+                    existing_lead = current_leads[0]
+                    
+                    # Fetch active scheduled local meeting records for this lead
+                    meeting_query = (
+                        select(Meeting)
+                        .where(
+                            Meeting.lead_id == existing_lead.id,
+                            Meeting.status == MeetingStatus.SCHEDULED.value
+                        )
+                        .limit(1)
+                    )
+                    meeting_res = await self.db.execute(meeting_query)
+                    active_meeting = meeting_res.scalar_one_or_none()
+                    
+                    if not active_meeting:
+                        response = f"No active scheduled appointments found in your workspace tracking database for {existing_lead.name}."
+                    else:
+                        cal_service = CalComService(self.db)
+                        await cal_service.cancel_booking(
+                            booking_uid=active_meeting.calendar_event_id,
+                            meeting_id=active_meeting.id
+                        )
+                        
+                        response = (
+                            f"### ❌ Meeting Canceled Successfully\n"
+                            f"The scheduled meeting record associated with **{existing_lead.name}** "
+                            f"(Event UID: `{active_meeting.calendar_event_id}`) has been withdrawn from Cal.com "
+                            f"and marked as `{MeetingStatus.CANCELLED.value}` locally."
+                        )
 
             else:
                 response = "I can help you search for prospects, analyze individuals, or modify your ICP. What would you like to do?"

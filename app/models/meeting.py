@@ -8,7 +8,6 @@ import uuid
 
 class MeetingStatus(str, enum.Enum):
     SCHEDULED = "Scheduled"
-    LIVE = "Live"
     COMPLETED = "Completed"
     CANCELLED = "Cancelled"
     NO_SHOW = "No-Show"
@@ -18,15 +17,8 @@ class Meeting(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    team_id = Column(
-        UUID(as_uuid=True), 
-        ForeignKey("teams.id", ondelete="CASCADE"), 
-        nullable=False, 
-        index=True
-    )
-    client = Column(String, nullable=False)
-    company = Column(String, nullable=True)
-    duration = Column(String, default="30 minutes", nullable=False)
+
+   
     
     
     # 🔗 Links to the lead (Using SET NULL so if a lead is deleted, the historical meeting records remain)
@@ -45,9 +37,8 @@ class Meeting(Base):
 
     # 📝 Content & AI Input Sandbox
     agenda = Column(JSONB, server_default='[]', nullable=False)      # e.g., ["Intro", "Demo"]
-    transcript = Column(JSONB, server_default='[]', nullable=False)  # e.g., ["00:01 Speaker: Hi..."]
+
     notes = Column(Text, nullable=True)
-    recording_url = Column(String, nullable=True)
 
     # 📊 Status Tracking with constraint
     status = Column(
