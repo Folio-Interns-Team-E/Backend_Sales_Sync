@@ -1,6 +1,6 @@
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.models.team import Team
-from app.models.team_member import TeamMember
+from app.models.team_member import TeamMember, MemberRole
 from app.models.lead import Lead, LeadStatus
 from app.models.email import Email, EmailStatus
 from app.models.meeting import Meeting, MeetingStatus

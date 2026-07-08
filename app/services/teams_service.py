@@ -3,9 +3,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 from uuid import UUID
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.models.team import Team
-from app.models.team_member import TeamMember
+from app.models.team_member import TeamMember, MemberRole
 from app.schemas.teams import (
     TeamCreate, InviteRequest,
     UpdateRoleRequest, JoinTeamRequest,
@@ -76,7 +76,7 @@ async def create_team(
     membership = TeamMember(
         user_id=current_user.id,
         team_id=new_team.id,
-        role=UserRole.admin
+        role=MemberRole.admin
     )
     db.add(membership)
     await db.commit()
@@ -136,7 +136,7 @@ async def invite_member(
     membership = TeamMember(
         user_id=user.id,
         team_id=inviter_membership.team_id,
-        role=UserRole.rep
+        role=MemberRole.rep
     )
     db.add(membership)
     await db.commit()
@@ -170,7 +170,7 @@ async def join_existing_team(
     membership = TeamMember(
         user_id=current_user.id,
         team_id=team.id,
-        role=UserRole.rep
+        role=MemberRole.rep
     )
     db.add(membership)
     await db.commit()

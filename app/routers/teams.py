@@ -6,7 +6,7 @@ from app.schemas.teams import TeamCreate, TeamResponse, InviteRequest, UpdateRol
 from app.schemas.common import ApiResponse
 from app.services.teams_service import create_team, get_team, invite_member, update_member_role, remove_member, join_existing_team, get_team_invite_code, get_user_teams
 from app.middleware.auth_middleware import get_current_user, require_role
-from app.models.user import UserRole
+from app.models.team_member import MemberRole
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -43,7 +43,7 @@ async def get_team_details(
 @router.post("/invite", response_model=ApiResponse[TeamResponse])
 async def invite_user(
     payload: InviteRequest,
-    current_user = Depends(require_role(UserRole.admin, UserRole.manager)),
+    current_user = Depends(require_role(MemberRole.admin, MemberRole.manager)),
     db: AsyncSession = Depends(get_db)
 ):
     team = await invite_member(payload, current_user, db)
@@ -55,7 +55,7 @@ async def change_member_role(
     team_id: UUID,
     user_id: UUID,
     payload: UpdateRoleRequest,
-    current_user=Depends(require_role(UserRole.admin)),
+    current_user=Depends(require_role(MemberRole.admin)),
     db: AsyncSession = Depends(get_db)
 ):
     team = await update_member_role(team_id, user_id, payload, current_user, db)
@@ -66,7 +66,7 @@ async def change_member_role(
 async def remove_team_member(
     team_id: UUID,
     user_id: UUID,
-    current_user=Depends(require_role(UserRole.admin, UserRole.manager)),
+    current_user=Depends(require_role(MemberRole.admin, MemberRole.manager)),
     db: AsyncSession = Depends(get_db)
 ):
     team = await remove_member(team_id, user_id, current_user, db)
@@ -86,7 +86,7 @@ async def join_team(
 @router.get("/{team_id}/invite-code", response_model=ApiResponse[dict])
 async def get_invite_code(
     team_id: UUID,
-    current_user=Depends(require_role(UserRole.admin)),
+    current_user=Depends(require_role(MemberRole.admin)),
     db: AsyncSession = Depends(get_db)
 ):
     invite_code = await get_team_invite_code(team_id, current_user, db)
