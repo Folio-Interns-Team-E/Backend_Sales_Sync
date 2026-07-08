@@ -14,7 +14,7 @@ class KnowledgeAsset(Base):
     
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-    tags = Column(JSONB, default=[])
+    tags = Column(JSONB, default=[], nullable=False)
     
     # S3 storage
     file_url = Column(String, nullable=False)   # S3 URL
@@ -22,6 +22,6 @@ class KnowledgeAsset(Base):
     file_size = Column(Integer, nullable=True)  # bytes
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     team = relationship("Team", back_populates="knowledge_assets")

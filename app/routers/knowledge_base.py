@@ -42,32 +42,23 @@ async def upload_asset(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # validate file type
+    # Validate file type
     if file.content_type not in ["application/pdf"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only PDF files are supported"
         )
-
-    file_bytes = await file.read()
     
-    # validate file size (10MB max)
-    if len(file_bytes) > 10 * 1024 * 1024:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File size must be under 10MB"
-        )
-
+    # Parse tags from comma-separated string
+    tag_list = [t.strip() for t in tags.split(",")] if tags else []
+    
     service = KnowledgeBaseService(db)
     asset = await service.upload_asset(
-        user_id=current_user.id,
-        file_bytes=file_bytes,
-        filename=file.filename,
-        content_type=file.content_type,
+        current_user.id,
         title=title,
+        file=file,
         description=description,
-        tags=tags.split(",") if tags else [],
-        file_size=len(file_bytes)
+        tags=tag_list,
     )
     return ApiResponse(success=True, message="Asset uploaded successfully", data=asset)
 

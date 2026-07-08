@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, PrimaryKeyConstraint, Enum
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, PrimaryKeyConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -27,7 +27,8 @@ class TeamMember(Base):
 
     role = Column(
         Enum(MemberRole),
-        default=MemberRole.rep
+        default=MemberRole.rep,
+        nullable=False
     )
 
     joined_at = Column(

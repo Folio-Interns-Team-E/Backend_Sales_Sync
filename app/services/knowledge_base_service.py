@@ -1,15 +1,25 @@
 import logging
-from typing import Optional
+import boto3
+from typing import Optional, List
 from uuid import UUID
-from datetime import date
+from io import BytesIO
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, UploadFile
 from app.models.knowledge_base import KnowledgeAsset
 from app.models.team import Team
 from app.models.team_member import TeamMember
+from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Initialize S3 client
+s3_client = boto3.client(
+    "s3",
+    aws_access_key_id=settings.aws_access_key_id,
+    aws_secret_access_key=settings.aws_secret_access_key,
+    region_name=settings.aws_region,
+)
 
 
 class KnowledgeBaseService:
@@ -43,29 +53,63 @@ class KnowledgeBaseService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge asset not found")
         return asset
 
-    async def create_asset(self, user_id: UUID, title: str,
-                            type: str = "Document",
-                            company: Optional[str] = None,
-                            asset_date: Optional[date] = None,
-                            description: Optional[str] = None,
-                            file_url: Optional[str] = None,
-                            source_url: Optional[str] = None):
+    async def upload_asset(
+        self,
+        user_id: UUID,
+        title: str,
+        file: UploadFile,
+        description: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ):
+        """Upload asset to S3 and store metadata in database."""
         team = await self._get_user_team(user_id)
-        asset = KnowledgeAsset(
-            team_id=team.id,
-            title=title,
-            type=type,
-            company=company,
-            date=asset_date,
-            description=description,
-            file_url=file_url,
-            source_url=source_url,
-            status="Indexed",
-        )
-        self.db.add(asset)
-        await self.db.commit()
-        await self.db.refresh(asset)
-        return asset
+        
+        # Read file content
+        file_content = await file.read()
+        file_size = len(file_content)
+        
+        # Generate S3 key
+        s3_key = f"knowledge-assets/{team.id}/{file.filename}"
+        
+        try:
+            # Upload to S3
+            s3_client.put_object(
+                Bucket=settings.aws_bucket_name,
+                Key=s3_key,
+                Body=file_content,
+                ContentType=file.content_type or "application/octet-stream",
+            )
+            
+            # Generate public URL
+            file_url = f"https://{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
+            
+            # Extract file type from content type
+            file_type = file.content_type.split("/")[-1] if file.content_type else "pdf"
+            
+            # Create database record
+            asset = KnowledgeAsset(
+                team_id=team.id,
+                title=title,
+                description=description,
+                tags=tags or [],
+                file_url=file_url,
+                file_type=file_type,
+                file_size=file_size,
+            )
+            
+            self.db.add(asset)
+            await self.db.commit()
+            await self.db.refresh(asset)
+            
+            logger.info(f"Asset {asset.id} uploaded successfully for team {team.id}")
+            return asset
+            
+        except Exception as e:
+            logger.error(f"Failed to upload asset: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to upload file: {str(e)}",
+            )
 
     async def delete_asset(self, asset_id: UUID, user_id: UUID):
         asset = await self.get_asset(asset_id, user_id)
