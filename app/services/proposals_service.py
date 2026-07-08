@@ -147,16 +147,16 @@ class ProposalService:
         await self.db.delete(proposal)
         await self.db.commit()
 
-    async def update_status(self, proposal_id: UUID, user_id: UUID, status: str):
+    async def update_status(self, proposal_id: UUID, user_id: UUID, new_status: str):
         proposal = await self.get_proposal(proposal_id, user_id)
         
-        if status not in [s.value for s in ProposalStatus]:
+        if new_status not in [s.value for s in ProposalStatus]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid status value"
+                detail="Invalid status value"
             )
         
-        proposal.status = status
+        proposal.status = new_status
         await self.db.commit()
         await self.db.refresh(proposal)
         return proposal

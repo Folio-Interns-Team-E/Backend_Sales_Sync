@@ -15,7 +15,7 @@ class KnowledgeAssetResponse(BaseModel):
     team_id: UUID
     title: str
     description: Optional[str] = None
-    tags: List = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
     file_url: str
     file_type: Optional[str] = None
     file_size: Optional[int] = None

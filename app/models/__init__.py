@@ -11,9 +11,9 @@ from app.models.chat import ChatMessage, ChatRole
 
 __all__ = [
     "User",
-    "UserRole",
     "Team",
     "TeamMember",
+    "MemberRole",
     "Lead",
     "LeadStatus",
     "Email",

@@ -1,8 +1,10 @@
 import logging
-import boto3
+import uuid
+import re
+import asyncio
 from typing import Optional, List
 from uuid import UUID
-from io import BytesIO
+import boto3
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from fastapi import HTTPException, status, UploadFile
@@ -22,6 +24,14 @@ s3_client = boto3.client(
 )
 
 
+def _sanitize_filename(filename: str) -> str:
+    # remove path separators
+    filename = filename.replace("/", "").replace("\\", "")
+    # keep only alphanumeric, dots, dashes, underscores
+    filename = re.sub(r"[^\w\.\-]", "_", filename)
+    return filename
+
+
 class KnowledgeBaseService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -32,25 +42,40 @@ class KnowledgeBaseService:
         )
         membership = result.scalar_one_or_none()
         if not membership:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User has no team")
-        result = await self.db.execute(select(Team).where(Team.id == membership.team_id))
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User has no team"
+            )
+        result = await self.db.execute(
+            select(Team).where(Team.id == membership.team_id)
+        )
         team = result.scalar_one_or_none()
         return team
 
     async def list_assets(self, user_id: UUID):
         team = await self._get_user_team(user_id)
-        query = select(KnowledgeAsset).where(KnowledgeAsset.team_id == team.id).order_by(desc(KnowledgeAsset.created_at))
+        query = (
+            select(KnowledgeAsset)
+            .where(KnowledgeAsset.team_id == team.id)
+            .order_by(desc(KnowledgeAsset.created_at))
+        )
         result = await self.db.execute(query)
         return result.scalars().all()
 
     async def get_asset(self, asset_id: UUID, user_id: UUID):
         team = await self._get_user_team(user_id)
         result = await self.db.execute(
-            select(KnowledgeAsset).where(KnowledgeAsset.id == asset_id, KnowledgeAsset.team_id == team.id)
+            select(KnowledgeAsset).where(
+                KnowledgeAsset.id == asset_id,
+                KnowledgeAsset.team_id == team.id
+            )
         )
         asset = result.scalar_one_or_none()
         if not asset:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge asset not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Knowledge asset not found"
+            )
         return asset
 
     async def upload_asset(
@@ -61,32 +86,31 @@ class KnowledgeBaseService:
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
     ):
-        """Upload asset to S3 and store metadata in database."""
         team = await self._get_user_team(user_id)
-        
-        # Read file content
+
         file_content = await file.read()
         file_size = len(file_content)
-        
-        # Generate S3 key
-        s3_key = f"knowledge-assets/{team.id}/{file.filename}"
-        
+
+        # sanitize filename and add UUID to avoid collisions
+        safe_filename = _sanitize_filename(file.filename or "upload")
+        unique_key = f"knowledge-assets/{team.id}/{uuid.uuid4()}/{safe_filename}"
+
         try:
-            # Upload to S3
-            s3_client.put_object(
-                Bucket=settings.aws_bucket_name,
-                Key=s3_key,
-                Body=file_content,
-                ContentType=file.content_type or "application/octet-stream",
+            # offload blocking S3 call to thread pool
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: s3_client.put_object(
+                    Bucket=settings.aws_bucket_name,
+                    Key=unique_key,
+                    Body=file_content,
+                    ContentType=file.content_type or "application/octet-stream",
+                )
             )
-            
-            # Generate public URL
-            file_url = f"https://{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{s3_key}"
-            
-            # Extract file type from content type
+
+            file_url = f"https://{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{unique_key}"
             file_type = file.content_type.split("/")[-1] if file.content_type else "pdf"
-            
-            # Create database record
+
             asset = KnowledgeAsset(
                 team_id=team.id,
                 title=title,
@@ -96,14 +120,16 @@ class KnowledgeBaseService:
                 file_type=file_type,
                 file_size=file_size,
             )
-            
+
             self.db.add(asset)
             await self.db.commit()
             await self.db.refresh(asset)
-            
+
             logger.info(f"Asset {asset.id} uploaded successfully for team {team.id}")
             return asset
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to upload asset: {str(e)}")
             raise HTTPException(
@@ -113,5 +139,24 @@ class KnowledgeBaseService:
 
     async def delete_asset(self, asset_id: UUID, user_id: UUID):
         asset = await self.get_asset(asset_id, user_id)
+
+        # extract S3 key from URL and delete from S3
+        try:
+            s3_key = asset.file_url.split(
+                f"{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/"
+            )[-1]
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: s3_client.delete_object(
+                    Bucket=settings.aws_bucket_name,
+                    Key=s3_key
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Failed to delete S3 object: {str(e)}")
+            # don't block DB deletion if S3 delete fails
+
         await self.db.delete(asset)
         await self.db.commit()
