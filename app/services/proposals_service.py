@@ -67,9 +67,7 @@ class ProposalService:
     async def update_proposal(self, proposal_id: UUID, user_id: UUID,
                                title: Optional[str] = None,
                                summary: Optional[str] = None,
-                               value: Optional[float] = None,
-                               status: Optional[str] = None,
-                               outcome: Optional[str] = None):
+                               value: Optional[float] = None):
         proposal = await self.get_proposal(proposal_id, user_id)
         if title is not None:
             proposal.title = title
@@ -77,17 +75,11 @@ class ProposalService:
             proposal.summary = summary
         if value is not None:
             proposal.value = value
-        if status is not None:
-            proposal.status = status
-        if outcome is not None:
-            proposal.outcome = outcome
-            if outcome == "Won":
-                proposal.status = ProposalStatus.ACCEPTED.value
-            elif outcome == "Lost":
-                proposal.status = ProposalStatus.REJECTED.value
         await self.db.commit()
         await self.db.refresh(proposal)
         return proposal
+
+    #SPLIT INTO UPDATE OUTCOME AND UPDATE STATUS
 
     async def add_revision(self, proposal_id: UUID, user_id: UUID,
                             title: str, summary: str,
@@ -154,3 +146,42 @@ class ProposalService:
         proposal = await self.get_proposal(proposal_id, user_id)
         await self.db.delete(proposal)
         await self.db.commit()
+
+    async def update_status(self, proposal_id: UUID, user_id: UUID, status: str):
+        proposal = await self.get_proposal(proposal_id, user_id)
+        
+        if status not in [s.value for s in ProposalStatus]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status value"
+            )
+        
+        proposal.status = status
+        await self.db.commit()
+        await self.db.refresh(proposal)
+        return proposal
+
+
+    async def update_outcome(self, proposal_id: UUID, user_id: UUID, outcome: str):
+        proposal = await self.get_proposal(proposal_id, user_id)
+        
+        if outcome not in [o.value for o in ProposalOutcome]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid outcome value"
+            )
+        
+        proposal.outcome = outcome
+        
+        # auto-sync status with outcome
+        if outcome == ProposalOutcome.WON.value:
+            proposal.status = ProposalStatus.ACCEPTED.value
+        elif outcome == ProposalOutcome.LOST.value:
+            proposal.status = ProposalStatus.REJECTED.value
+        
+        # placeholder: trigger KB update here
+        # await kb_service.store_proposal_outcome(proposal)
+        
+        await self.db.commit()
+        await self.db.refresh(proposal)
+        return proposal

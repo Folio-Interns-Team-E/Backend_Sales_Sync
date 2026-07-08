@@ -5,7 +5,7 @@ from app.database import get_db
 from app.middleware.auth_middleware import get_current_user
 from app.models.user import User
 from app.schemas.proposals import (
-    ProposalCreate, ProposalUpdate, ProposalResponse,
+    ProposalCreate, ProposalUpdate, ProposalOutcomeUpdate, ProposalStatusUpdate, ProposalResponse,
     ProposalRevisionCreate, ProposalRevisionResponse,
     ProposalTemplateUpdate, ProposalTemplateResponse,
 )
@@ -60,7 +60,7 @@ async def update_proposal(
     service = ProposalService(db)
     proposal = await service.update_proposal(
         proposal_id, current_user.id, payload.title,
-        payload.summary, payload.value, payload.status, payload.outcome
+        payload.summary, payload.value
     )
     return ApiResponse(success=True, message="Proposal updated successfully", data=proposal)
 
@@ -115,3 +115,26 @@ async def delete_proposal(
     service = ProposalService(db)
     await service.delete_proposal(proposal_id, current_user.id)
     return ApiResponse(success=True, message="Proposal deleted", data={})
+
+@router.patch("/{proposal_id}/status", response_model=ApiResponse[ProposalResponse])
+async def update_proposal_status(
+    proposal_id: UUID,
+    payload: ProposalStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = ProposalService(db)
+    proposal = await service.update_status(proposal_id, current_user.id, payload.status)
+    return ApiResponse(success=True, message="Status updated", data=proposal)
+
+
+@router.patch("/{proposal_id}/outcome", response_model=ApiResponse[ProposalResponse])
+async def update_proposal_outcome(
+    proposal_id: UUID,
+    payload: ProposalOutcomeUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = ProposalService(db)
+    proposal = await service.update_outcome(proposal_id, current_user.id, payload.outcome)
+    return ApiResponse(success=True, message="Outcome updated", data=proposal)

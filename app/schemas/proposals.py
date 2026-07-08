@@ -16,8 +16,8 @@ class ProposalUpdate(BaseModel):
     title: Optional[str] = None
     summary: Optional[str] = None
     value: Optional[float] = None
-    status: Optional[str] = None
-    outcome: Optional[str] = None
+    #status: Optional[str] = None
+    #outcome: Optional[str] = None
 
 
 class ProposalRevisionCreate(BaseModel):
@@ -77,3 +77,9 @@ class ProposalTemplateResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+class ProposalStatusUpdate(BaseModel):
+    status: str
+
+class ProposalOutcomeUpdate(BaseModel):
+    outcome: str
