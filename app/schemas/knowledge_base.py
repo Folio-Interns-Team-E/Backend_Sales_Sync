@@ -19,6 +19,7 @@ class KnowledgeAssetResponse(BaseModel):
     file_url: str
     file_type: Optional[str] = None
     file_size: Optional[int] = None
+    presigned_url: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

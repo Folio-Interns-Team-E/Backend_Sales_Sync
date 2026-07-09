@@ -279,42 +279,61 @@ class ChatService(ChatAgentsService):
                         )
 
             elif action == "GENERATE_PROPOSAL":
-                import os
-                
+                from app.core.s3 import upload_to_s3
+                from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome
+
+                name_keywords = params.get("keywords", [])
+                lead_id = None
+                if name_keywords:
+                    current_leads = await self.search_current_leads_by_name(
+                        team.id, name_keywords, limit=1
+                    )
+                    if current_leads:
+                        lead_id = current_leads[0].id
+
                 # 1. Compile textual layout payload maps via Groq
                 title, raw_proposal_json = await self._compile_proposal_data(message, icp)
-                
+
                 # 2. Build the structural .docx stream layout block array in memory
                 file_bytes_stream = self.create_proposal_document(title, raw_proposal_json)
-                
-                # 3. Save the file directly to the local disk server volume
-                storage_dir = "./storage/proposals"
-                os.makedirs(storage_dir, exist_ok=True)
-                
-                # Create a clean file name and file path
-                safe_title = title.replace(" ", "_")
-                file_name = f"{safe_title}.docx"
-                file_path = os.path.join(storage_dir, file_name)
-                
-                # Write the memory buffer bytes onto disk
-                with open(file_path, "wb") as f:
-                    f.write(file_bytes_stream.getbuffer())
-                    
-                logger.info(f"Proposal successfully saved to server disk at: {file_path}")
 
-                # 4. Extract sections to display preview text right inside the chat window
+                # 3. Upload the file to S3
+                safe_title = title.replace(" ", "_").replace("/", "_")
+                file_name = f"{safe_title}.docx"
+                file_bytes = file_bytes_stream.getvalue()
+                file_url = await upload_to_s3(
+                    file_bytes=file_bytes,
+                    filename=file_name,
+                    content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    prefix="proposals",
+                    user_id=str(user_id),
+                )
+
+                # 4. Save a Proposal record in the database
+                proposal = Proposal(
+                    lead_id=lead_id,
+                    file_url=file_url,
+                    file_type="docx",
+                    file_size=len(file_bytes),
+                    ai_metadata=raw_proposal_json,
+                    version=1,
+                    status=ProposalStatus.DRAFT.value,
+                    outcome=ProposalOutcome.OPEN.value,
+                )
+                self.db.add(proposal)
+                await self.db.flush()
+
+                logger.info(f"Proposal saved to S3: {file_url}")
+
+                # 5. Extract sections to display preview text in the chat
                 exec_summary = raw_proposal_json.get("executive_summary", "")
                 problem_stmt = raw_proposal_json.get("problem_statement", "")
                 solution = raw_proposal_json.get("proposed_solution", "")
                 pricing = raw_proposal_json.get("investment_and_pricing", "")
 
-                # Point the link to your local dynamic download endpoint
-                download_link = f"/api/proposals/download/{file_name}" 
-                
                 response = (
                     f"### 📄 Generated Proposal: {title.replace('_', ' ')}\n"
-                    f"💾 *Saved to server disk path: `{file_path}`*\n\n"
-                    f"📥 **[Download Word Document (.docx)]({download_link})**\n\n"
+                    f"📎 **S3 URL:** [Open Document]({file_url})\n\n"
                     f"--- \n\n"
                     f"#### **1. Executive Summary**\n"
                     f"{exec_summary}\n\n"
@@ -325,7 +344,7 @@ class ChatService(ChatAgentsService):
                     f"#### **4. Commercial Terms & Financial Scope**\n"
                     f"{pricing}\n\n"
                     f"--- \n"
-                    f"*The full document has been compiled and safely written to storage.*"
+                    f"*Proposal saved to S3 and recorded in your workspace.*"
                 )
 
             else:

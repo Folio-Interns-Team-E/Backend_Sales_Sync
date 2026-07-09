@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from app.database import get_db
@@ -90,6 +90,25 @@ async def upsert_template(
         payload.file_url, payload.file_type, payload.file_size,
     )
     return ApiResponse(success=True, message="Template saved", data=template)
+
+
+@router.post("/template/upload", response_model=ApiResponse[ProposalTemplateResponse], status_code=201)
+async def upload_template(
+    file: UploadFile = File(...),
+    template_name: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    file_bytes = await file.read()
+    service = ProposalService(db)
+    template = await service.upload_template(
+        current_user.id,
+        template_name=template_name,
+        file_bytes=file_bytes,
+        filename=file.filename or "template",
+        content_type=file.content_type or "application/octet-stream",
+    )
+    return ApiResponse(success=True, message="Template uploaded successfully", data=template)
 
 
 @router.delete("/{proposal_id}", response_model=ApiResponse[dict])

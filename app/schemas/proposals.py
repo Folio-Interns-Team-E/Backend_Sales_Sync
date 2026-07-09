@@ -33,6 +33,7 @@ class ProposalResponse(BaseModel):
     file_size: Optional[int] = None
     version: int
     ai_metadata: dict
+    presigned_url: Optional[str] = None
     sent_at: Optional[datetime] = None
     responded_at: Optional[datetime] = None
     created_at: datetime
@@ -55,6 +56,7 @@ class ProposalTemplateResponse(BaseModel):
     file_url: str
     file_type: Optional[str] = None
     file_size: Optional[int] = None
+    presigned_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

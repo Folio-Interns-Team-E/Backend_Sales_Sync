@@ -2,12 +2,13 @@ import logging
 from typing import Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_
 from fastapi import HTTPException, status
 from app.models.proposal import Proposal, ProposalTemplate, ProposalStatus, ProposalOutcome
 from app.models.lead import Lead
 from app.models.team import Team
 from app.models.team_member import TeamMember
+from app.core.s3 import generate_presigned_url, upload_to_s3 as s3_upload
 
 logger = logging.getLogger(__name__)
 
@@ -33,23 +34,40 @@ class ProposalService:
         team = await self._get_user_team(user_id)
         query = (
             select(Proposal)
-            .join(Lead, Proposal.lead_id == Lead.id)
-            .where(Lead.team_id == team.id)
+            .outerjoin(Lead, Proposal.lead_id == Lead.id)
+            .where(
+                or_(
+                    Lead.team_id == team.id,
+                    Proposal.lead_id.is_(None)
+                )
+            )
             .order_by(desc(Proposal.updated_at))
         )
         result = await self.db.execute(query)
-        return result.scalars().all()
+        proposals = result.scalars().all()
+        for p in proposals:
+            if p.file_url and "amazonaws.com" in p.file_url:
+                p.presigned_url = generate_presigned_url(p.file_url)
+        return proposals
 
     async def get_proposal(self, proposal_id: UUID, user_id: UUID):
         team = await self._get_user_team(user_id)
         result = await self.db.execute(
             select(Proposal)
-            .join(Lead, Proposal.lead_id == Lead.id)
-            .where(Proposal.id == proposal_id, Lead.team_id == team.id)
+            .outerjoin(Lead, Proposal.lead_id == Lead.id)
+            .where(
+                Proposal.id == proposal_id,
+                or_(
+                    Lead.team_id == team.id,
+                    Proposal.lead_id.is_(None)
+                )
+            )
         )
         proposal = result.scalar_one_or_none()
         if not proposal:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found")
+        if proposal.file_url and "amazonaws.com" in proposal.file_url:
+            proposal.presigned_url = generate_presigned_url(proposal.file_url)
         return proposal
 
     async def create_proposal(self, user_id: UUID, file_url: str,
@@ -98,12 +116,19 @@ class ProposalService:
         await self.db.refresh(proposal)
         return proposal
 
+    def _attach_template_presigned(self, template: ProposalTemplate):
+        if template.file_url and "amazonaws.com" in template.file_url:
+            template.presigned_url = generate_presigned_url(template.file_url)
+
     async def get_template(self, user_id: UUID):
         team = await self._get_user_team(user_id)
         result = await self.db.execute(
             select(ProposalTemplate).where(ProposalTemplate.team_id == team.id)
         )
-        return result.scalar_one_or_none()
+        template = result.scalar_one_or_none()
+        if template:
+            self._attach_template_presigned(template)
+        return template
 
     async def upsert_template(self, user_id: UUID,
                                template_name: Optional[str] = None,
@@ -135,7 +160,37 @@ class ProposalService:
                 template.file_size = file_size
         await self.db.commit()
         await self.db.refresh(template)
+        self._attach_template_presigned(template)
         return template
+
+    async def upload_template(
+        self,
+        user_id: UUID,
+        template_name: str,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str,
+    ):
+        team = await self._get_user_team(user_id)
+
+        file_url = await s3_upload(
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+            prefix="proposal-templates",
+            user_id=str(user_id),
+        )
+
+        file_type = content_type.split("/")[-1] if content_type else None
+        file_size = len(file_bytes)
+
+        return await self.upsert_template(
+            user_id,
+            template_name=template_name,
+            file_url=file_url,
+            file_type=file_type,
+            file_size=file_size,
+        )
 
     async def delete_proposal(self, proposal_id: UUID, user_id: UUID):
         proposal = await self.get_proposal(proposal_id, user_id)

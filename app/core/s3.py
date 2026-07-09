@@ -17,9 +17,9 @@ def _sanitize_filename(filename: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", base_name)
     return sanitized.strip("._") or "file"
 
-async def upload_to_s3(file_bytes: bytes, filename: str, content_type: str) -> str:
+async def upload_to_s3(file_bytes: bytes, filename: str, content_type: str, prefix: str = "knowledge-base", user_id: str = "system") -> str:
     safe_filename = _sanitize_filename(filename)
-    key = f"knowledge-base/{uuid.uuid4()}/{safe_filename}"
+    key = f"{prefix}/{user_id}/{uuid.uuid4()}/{safe_filename}"
     
     await to_thread(
         s3_client.put_object,
@@ -30,4 +30,14 @@ async def upload_to_s3(file_bytes: bytes, filename: str, content_type: str) -> s
     )
     
     url = f"https://{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{key}"
+    return url
+
+
+def generate_presigned_url(s3_url: str, expiration: int = 3600) -> str:
+    key = s3_url.split(f"{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/")[-1]
+    url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.aws_bucket_name, "Key": key},
+        ExpiresIn=expiration,
+    )
     return url

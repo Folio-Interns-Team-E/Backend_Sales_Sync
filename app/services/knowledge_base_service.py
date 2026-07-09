@@ -12,6 +12,7 @@ from app.models.knowledge_base import KnowledgeAsset
 from app.models.team import Team
 from app.models.team_member import TeamMember
 from app.config import settings
+from app.core.s3 import generate_presigned_url
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,10 @@ class KnowledgeBaseService:
         team = result.scalar_one_or_none()
         return team
 
+    def _attach_presigned(self, asset: KnowledgeAsset):
+        if asset.file_url and "amazonaws.com" in asset.file_url:
+            asset.presigned_url = generate_presigned_url(asset.file_url)
+
     async def list_assets(self, user_id: UUID):
         team = await self._get_user_team(user_id)
         query = (
@@ -60,7 +65,10 @@ class KnowledgeBaseService:
             .order_by(desc(KnowledgeAsset.created_at))
         )
         result = await self.db.execute(query)
-        return result.scalars().all()
+        assets = result.scalars().all()
+        for a in assets:
+            self._attach_presigned(a)
+        return assets
 
     async def get_asset(self, asset_id: UUID, user_id: UUID):
         team = await self._get_user_team(user_id)
@@ -76,6 +84,7 @@ class KnowledgeBaseService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Knowledge asset not found"
             )
+        self._attach_presigned(asset)
         return asset
 
     async def upload_asset(
