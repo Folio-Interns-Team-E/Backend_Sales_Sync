@@ -54,3 +54,8 @@ class OnboardingService:
             team.icp = product_description
         await self.db.commit()
         return team.icp
+
+    async def delete_onboarding(self, user_id: UUID) -> None:
+        team = await self._get_user_team(user_id)
+        team.icp = None
+        await self.db.commit()

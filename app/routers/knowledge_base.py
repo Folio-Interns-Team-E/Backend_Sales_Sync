@@ -5,7 +5,7 @@ from typing import Optional
 from app.database import get_db
 from app.middleware.auth_middleware import get_current_user
 from app.models.user import User
-from app.schemas.knowledge_base import KnowledgeAssetResponse
+from app.schemas.knowledge_base import KnowledgeAssetResponse, KnowledgeAssetUpdate
 from app.schemas.common import ApiResponse
 from app.services.knowledge_base_service import KnowledgeBaseService
 
@@ -61,6 +61,21 @@ async def upload_asset(
         tags=tag_list,
     )
     return ApiResponse(success=True, message="Asset uploaded successfully", data=asset)
+
+
+@router.patch("/{asset_id}", response_model=ApiResponse[KnowledgeAssetResponse])
+async def update_asset(
+    asset_id: UUID,
+    payload: KnowledgeAssetUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = KnowledgeBaseService(db)
+    asset = await service.update_asset(
+        asset_id, current_user.id,
+        title=payload.title, description=payload.description, tags=payload.tags,
+    )
+    return ApiResponse(success=True, message="Asset updated successfully", data=asset)
 
 
 @router.delete("/{asset_id}", response_model=ApiResponse[dict])

@@ -13,10 +13,10 @@ from app.models.team import Team
 from app.models.team_member import TeamMember
 from app.config import settings
 from app.core.s3 import generate_presigned_url
+from app.core.cache import cache_get, cache_set, cache_delete
 
 logger = logging.getLogger(__name__)
 
-# Initialize S3 client
 s3_client = boto3.client(
     "s3",
     aws_access_key_id=settings.aws_access_key_id,
@@ -26,9 +26,7 @@ s3_client = boto3.client(
 
 
 def _sanitize_filename(filename: str) -> str:
-    # remove path separators
     filename = filename.replace("/", "").replace("\\", "")
-    # keep only alphanumeric, dots, dashes, underscores
     filename = re.sub(r"[^\w\.\-]", "_", filename)
     return filename
 
@@ -53,12 +51,20 @@ class KnowledgeBaseService:
         team = result.scalar_one_or_none()
         return team
 
-    def _attach_presigned(self, asset: KnowledgeAsset):
+    def _attach_presigned(self, asset):
         if asset.file_url and "amazonaws.com" in asset.file_url:
             asset.presigned_url = generate_presigned_url(asset.file_url)
 
     async def list_assets(self, user_id: UUID):
         team = await self._get_user_team(user_id)
+        cache_key = f"kb_assets:{team.id}:list"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            for a in cached:
+                if a.get("file_url") and "amazonaws.com" in a["file_url"]:
+                    a["presigned_url"] = generate_presigned_url(a["file_url"])
+            return cached
+
         query = (
             select(KnowledgeAsset)
             .where(KnowledgeAsset.team_id == team.id)
@@ -66,9 +72,10 @@ class KnowledgeBaseService:
         )
         result = await self.db.execute(query)
         assets = result.scalars().all()
-        for a in assets:
-            self._attach_presigned(a)
-        return assets
+        from app.schemas.knowledge_base import KnowledgeAssetResponse
+        data = [KnowledgeAssetResponse.model_validate(a).model_dump(mode="json") for a in assets]
+        cache_set(cache_key, data, ttl=60)
+        return data
 
     async def get_asset(self, asset_id: UUID, user_id: UUID):
         team = await self._get_user_team(user_id)
@@ -100,12 +107,10 @@ class KnowledgeBaseService:
         file_content = await file.read()
         file_size = len(file_content)
 
-        # sanitize filename and add UUID to avoid collisions
         safe_filename = _sanitize_filename(file.filename or "upload")
         unique_key = f"knowledge-assets/{team.id}/{uuid.uuid4()}/{safe_filename}"
 
         try:
-            # offload blocking S3 call to thread pool
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
@@ -135,6 +140,7 @@ class KnowledgeBaseService:
             await self.db.refresh(asset)
 
             logger.info(f"Asset {asset.id} uploaded successfully for team {team.id}")
+            cache_delete(f"kb_assets:{team.id}:list")
             return asset
 
         except HTTPException:
@@ -146,10 +152,28 @@ class KnowledgeBaseService:
                 detail=f"Failed to upload file: {str(e)}",
             )
 
+    async def update_asset(self, asset_id: UUID, user_id: UUID,
+                            title: str | None = None,
+                            description: str | None = None,
+                            tags: list[str] | None = None):
+        asset = await self.get_asset(asset_id, user_id)
+        if title is not None:
+            asset.title = title
+        if description is not None:
+            asset.description = description
+        if tags is not None:
+            asset.tags = tags
+        await self.db.commit()
+        await self.db.refresh(asset)
+        self._attach_presigned(asset)
+        team = await self._get_user_team(user_id)
+        cache_delete(f"kb_assets:{team.id}:list")
+        return asset
+
     async def delete_asset(self, asset_id: UUID, user_id: UUID):
         asset = await self.get_asset(asset_id, user_id)
+        team = await self._get_user_team(user_id)
 
-        # extract S3 key from URL and delete from S3
         try:
             s3_key = asset.file_url.split(
                 f"{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/"
@@ -165,7 +189,7 @@ class KnowledgeBaseService:
             )
         except Exception as e:
             logger.warning(f"Failed to delete S3 object: {str(e)}")
-            # don't block DB deletion if S3 delete fails
 
         await self.db.delete(asset)
         await self.db.commit()
+        cache_delete(f"kb_assets:{team.id}:list")

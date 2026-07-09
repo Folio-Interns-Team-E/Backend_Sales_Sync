@@ -1,13 +1,17 @@
-from fastapi import APIRouter, Depends, status, Response
+from fastapi import APIRouter, Depends, status, Response, Cookie
 from sqlalchemy.ext.asyncio import AsyncSession
-
-
-#dependencies
+from fastapi import BackgroundTasks
+from app.schemas.auth import OTPRequest, OTPVerifyRequest
+from app.schemas.common import ApiResponse
+from app.services.auth_service import request_otp_service, verify_otp_service
 from app.database import get_db
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, RegisterResponse
 from app.schemas.common import ApiResponse
 from app.services.auth_service import register_user, login_user, logout_user
 from app.middleware.auth_middleware import get_current_user
+from app.core.redis import get_redis
+from app.core.security import decode_token_without_verification
+import time
 
 #router init (auth grouping)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -43,8 +47,43 @@ async def login(
         data=result
     )
 
-#logout endpoint
-@router.post("/logout", response_model=ApiResponse[dict])
-async def logout(current_user = Depends(get_current_user)):
-    await logout_user(current_user)
-    return ApiResponse(success=True, message="Logged out successfully", data={})
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(response: Response, refresh_token: str | None = Cookie(default=None)):
+    # Clear client cookie
+    response.delete_cookie(
+        key="refresh_token",
+        path="/auth/refresh",
+        httponly=True,
+        samesite="lax",
+        secure=True
+    )
+
+    if refresh_token:
+        redis = get_redis()
+        payload = decode_token_without_verification(refresh_token)
+        
+        if redis and payload and "exp" in payload:
+            ttl_seconds = int(payload["exp"] - time.time())
+            if ttl_seconds > 0:
+                redis.setex(f"blocklist:{refresh_token}", ttl_seconds, "revoked")
+                
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/otp/request", response_model=ApiResponse[dict])
+async def request_otp(payload: OTPRequest, background_tasks: BackgroundTasks):
+    await request_otp_service(payload, background_tasks)
+    return ApiResponse(
+        success=True, 
+        message="Verification code sent successfully to your email.", 
+        data={}
+    )
+
+@router.post("/otp/verify", response_model=ApiResponse[dict])
+async def verify_otp(payload: OTPVerifyRequest):
+    await verify_otp_service(payload)
+    return ApiResponse(
+        success=True, 
+        message="OTP verified successfully.", 
+        data={}
+    )

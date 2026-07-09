@@ -9,6 +9,7 @@ from app.models.meeting import Meeting
 from app.models.lead import Lead
 from app.models.team import Team
 from app.models.team_member import TeamMember
+from app.core.cache import cache_get, cache_set, cache_delete
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,11 @@ class MeetingService:
 
     async def list_meetings(self, user_id: UUID):
         team = await self._get_user_team(user_id)
+        cache_key = f"meetings:{team.id}:list"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         query = (
             select(Meeting)
             .join(Lead, Meeting.lead_id == Lead.id)
@@ -39,7 +45,11 @@ class MeetingService:
             .order_by(desc(Meeting.date))
         )
         result = await self.db.execute(query)
-        return result.scalars().all()
+        meetings = result.scalars().all()
+        from app.schemas.meetings import MeetingResponse
+        data = [MeetingResponse.model_validate(m).model_dump(mode="json") for m in meetings]
+        cache_set(cache_key, data)
+        return data
 
     async def get_meeting(self, meeting_id: UUID, user_id: UUID):
         team = await self._get_user_team(user_id)
@@ -73,6 +83,7 @@ class MeetingService:
         self.db.add(meeting)
         await self.db.commit()
         await self.db.refresh(meeting)
+        cache_delete(f"meetings:{team.id}:list")
         return meeting
 
     async def update_meeting(self, meeting_id: UUID, user_id: UUID,
@@ -100,9 +111,13 @@ class MeetingService:
             meeting.calendar_event_id = calendar_event_id
         await self.db.commit()
         await self.db.refresh(meeting)
+        team = await self._get_user_team(user_id)
+        cache_delete(f"meetings:{team.id}:list")
         return meeting
 
     async def delete_meeting(self, meeting_id: UUID, user_id: UUID):
         meeting = await self.get_meeting(meeting_id, user_id)
+        team = await self._get_user_team(user_id)
         await self.db.delete(meeting)
         await self.db.commit()
+        cache_delete(f"meetings:{team.id}:list")

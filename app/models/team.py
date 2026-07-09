@@ -8,17 +8,6 @@ import secrets
 import enum
 
 
-class SubscriptionTier(str, enum.Enum):
-    FREE = "free"
-    GROWTH = "growth"
-    ENTERPRISE = "enterprise"
-
-
-class SubscriptionStatus(str, enum.Enum):
-    ACTIVE = "active"
-    CANCELLED = "cancelled"
-    PAST_DUE = "past_due"
-    TRIALING = "trialing"
 
 
 class Team(Base):
@@ -37,12 +26,11 @@ class Team(Base):
         default=lambda: secrets.token_urlsafe(8)
     )
     
-    # Stripe subscription fields
+
     stripe_customer_id = Column(String, nullable=True, unique=True)
-    stripe_subscription_id = Column(String, nullable=True, unique=True)
-    subscription_tier = Column(String, default=SubscriptionTier.FREE.value, nullable=False)
-    subscription_status = Column(String, default=SubscriptionStatus.ACTIVE.value, nullable=False)
-    subscription_ends_at = Column(DateTime(timezone=True), nullable=True)
+    
+    subscriptions = relationship("Subscription", back_populates="team", cascade="all, delete-orphan")
+    invoices = relationship("Invoice", back_populates="team", cascade="all, delete-orphan")
 
   
     members = relationship(
@@ -56,3 +44,7 @@ class Team(Base):
     proposal_templates = relationship("ProposalTemplate", back_populates="team")
     knowledge_assets = relationship("KnowledgeAsset", back_populates="team")
     chat_messages = relationship("ChatMessage", back_populates="team", cascade="all, delete-orphan")
+
+
+
+    

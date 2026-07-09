@@ -57,3 +57,11 @@ def decode_access_token(token: str) -> Optional[dict]:
         return payload
     except JWTError:
         return None
+
+
+def decode_token_without_verification(token: str) -> Optional[dict]:
+    try:
+        # python-jose allows unverified decoding via options
+        return jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM], options={"verify_signature": False})
+    except JWTError:
+        return None

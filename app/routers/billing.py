@@ -5,7 +5,8 @@ import stripe
 
 from app.database import get_db
 from app.config import settings
-from app.models.team import Team, SubscriptionStatus, SubscriptionTier
+from app.models.team import Team
+from app.models.subscription import  SubscriptionStatus, SubscriptionTier
 from app.services.billing_service import BillingService
 from app.middleware.auth_middleware import get_current_user
 from app.models.user import User

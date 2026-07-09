@@ -26,12 +26,20 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
+    # upstash redis
+    upstash_redis_rest_url: str = ""
+    upstash_redis_rest_token: str = ""
+
     # stripe
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_growth_price: str = ""
     stripe_enterprise_price: str = ""
+
+    RESEND_API_KEY: str = ""
+    FROM_EMAIL: str = ""
+    DB_ENCRYPTION_KEY: str = ""
     
     # app
     app_env: str = "development"

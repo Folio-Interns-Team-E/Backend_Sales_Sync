@@ -47,3 +47,11 @@ class RegisterResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class OTPRequest(BaseModel):
+    email: EmailStr
+
+class OTPVerifyRequest(BaseModel):
+    email: EmailStr
+    otp: str

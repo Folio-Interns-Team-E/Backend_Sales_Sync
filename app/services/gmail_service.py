@@ -8,7 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import SessionLocal
 from app.models.google_credentials import GoogleCredentials
+from app.models.lead import Lead
 
 logger = logging.getLogger(__name__)
 
@@ -75,3 +77,27 @@ async def send_email_on_behalf_of_user(
             json={"raw": raw},
         )
         resp.raise_for_status()
+
+
+async def send_email_in_background(
+    user_id: UUID,
+    lead_id: UUID,
+    subject: str,
+    body: str,
+) -> None:
+    try:
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(Lead).where(Lead.id == lead_id)
+            )
+            lead = result.scalar_one_or_none()
+            if not lead or not lead.email:
+                logger.warning(f"Lead {lead_id} not found or has no email")
+                return
+
+            await send_email_on_behalf_of_user(
+                db, user_id, lead.email, subject, body,
+            )
+            logger.info(f"Gmail sent to {lead.email} for user {user_id}")
+    except Exception as e:
+        logger.error(f"Background Gmail send failed for user {user_id}: {e}")

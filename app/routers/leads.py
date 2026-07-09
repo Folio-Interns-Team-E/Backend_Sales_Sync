@@ -4,7 +4,7 @@ from uuid import UUID
 from app.database import get_db
 from app.middleware.auth_middleware import get_current_user
 from app.models.user import User
-from app.schemas.leads import LeadCreate, LeadUpdate, LeadResponse, LeadListResponse
+from app.schemas.leads import LeadCreate, LeadUpdate, LeadPatch, LeadResponse, LeadListResponse
 from app.schemas.common import ApiResponse
 from app.services.leads_service import LeadService
 
@@ -45,6 +45,23 @@ async def create_lead(
         payload.title, payload.email, payload.source
     )
     return ApiResponse(success=True, message="Lead created successfully", data=lead)
+
+
+@router.patch("/{lead_id}", response_model=ApiResponse[LeadResponse])
+async def update_lead(
+    lead_id: UUID,
+    payload: LeadPatch,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = LeadService(db)
+    lead = await service.update_lead(
+        lead_id, current_user.id,
+        name=payload.name, company=payload.company,
+        title=payload.title, email=payload.email,
+        source=payload.source,
+    )
+    return ApiResponse(success=True, message="Lead updated successfully", data=lead)
 
 
 @router.patch("/{lead_id}/status", response_model=ApiResponse[LeadResponse])

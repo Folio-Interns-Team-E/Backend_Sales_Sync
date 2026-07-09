@@ -71,6 +71,16 @@ async def get_icp(
     )
 
 
+@router.delete("/icp", response_model=ApiResponse[dict])
+async def delete_icp(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = OnboardingService(db)
+    await service.delete_onboarding(current_user.id)
+    return ApiResponse(success=True, message="ICP reset successfully", data={})
+
+
 @router.put("/icp", response_model=ApiResponse[OnboardingResponse])
 async def update_icp(
     request: OnboardingRequest,

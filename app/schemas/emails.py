@@ -12,6 +12,11 @@ class EmailCreate(BaseModel):
     tone: Optional[str] = "Professional"
 
 
+class EmailUpdate(BaseModel):
+    subject: str | None = None
+    body: str | None = None
+
+
 class EmailResponse(BaseModel):
     id: UUID
     lead_id: UUID

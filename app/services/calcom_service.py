@@ -6,6 +6,13 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models.meeting import Meeting, MeetingStatus
+import os
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from cryptography.fernet import Fernet
+from app.models.calcom_credentials import CalComIntegration
+from app.schemas.calcom import CalComIntegrationCreate
+from uuid import UUID
 
 
 logger = logging.getLogger(__name__)
@@ -164,3 +171,56 @@ class CalComService:
             "status": "cancelled",
             "booking_uid": booking_uid
         }
+    
+
+
+ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY")
+cipher = Fernet(ENCRYPTION_KEY.encode() if ENCRYPTION_KEY else Fernet.generate_key())
+
+def encrypt_key(plain_text: str) -> str:
+    return cipher.encrypt(plain_text.encode()).decode()
+
+def decrypt_key(encrypted_text: str) -> str:
+    return cipher.decrypt(encrypted_text.encode()).decode()
+
+
+async def save_or_update_calcom(db: AsyncSession, user_id: UUID, payload: CalComIntegrationCreate):
+    """Saves or updates a user's Cal.com integration config securely."""
+    # Check if integration configuration already exists for this user
+    query = select(CalComIntegration).where(CalComIntegration.user_id == user_id)
+    result = await db.execute(query)
+    integration = result.scalar_one_or_none()
+
+    encrypted_key = encrypt_key(payload.cal_api_key)
+
+    if integration:
+        # Update existing config
+        integration.encrypted_api_key = encrypted_key
+        integration.event_type_id = payload.cal_event_type_id
+    else:
+        # Create new config record
+        integration = CalComIntegration(
+            user_id=user_id,
+            encrypted_api_key=encrypted_key,
+            event_type_id=payload.cal_event_type_id
+        )
+        db.add(integration)
+
+    await db.commit()
+    await db.refresh(integration)
+    return integration
+
+
+async def get_calcom_credentials(db: AsyncSession, user_id: UUID):
+    """Fetches credentials and returns decrypted API key for backend utility processing."""
+    query = select(CalComIntegration).where(CalComIntegration.user_id == user_id)
+    result = await db.execute(query)
+    integration = result.scalar_one_or_none()
+
+    if not integration:
+        return None
+
+    return {
+        "api_key": decrypt_key(integration.encrypted_api_key),
+        "event_type_id": integration.event_type_id
+    }

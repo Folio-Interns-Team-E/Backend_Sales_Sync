@@ -1,12 +1,15 @@
 import stripe
 from uuid import UUID
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from fastapi import HTTPException
 
 from app.config import settings
-from app.models.team import Team, SubscriptionStatus
+from app.models.team import Team
 from app.models.team_member import TeamMember
+# Assuming Subscription and Invoice are in app.models.subscription
+from app.models.subscription import Subscription, SubscriptionStatus, SubscriptionTier
 
 stripe.api_key = settings.stripe_secret_key
 
@@ -45,22 +48,24 @@ class BillingService:
         if not price_id:
             raise HTTPException(status_code=400, detail="Invalid tier")
         
-        # create or get stripe customer
+        # Create stripe customer if they don't have one yet
         if not team.stripe_customer_id:
-            customer = stripe.Customer.create(
-                metadata={"team_id": str(team.id)}
+            # Using Stripe's async client to avoid blocking the event loop
+            customer = await stripe.Customer.create_async(
+                metadata={"team_id": str(team.id)},
+                name=team.name # Nice to have in Stripe dashboard
             )
             team.stripe_customer_id = customer.id
             await self.db.commit()
         
-        # create checkout session
-        session = stripe.checkout.Session.create(
+        # Create checkout session
+        session = await stripe.checkout.Session.create_async(
             customer=team.stripe_customer_id,
             payment_method_types=["card"],
             line_items=[{"price": price_id, "quantity": 1}],
             mode="subscription",
-            success_url="https://your-frontend.com/billing/success",
-            cancel_url="https://your-frontend.com/billing/cancel",
+            success_url="http://localhost:8080/billing/success",
+            cancel_url="http://localhost:8080/billing/cancel",
             metadata={"team_id": str(team.id), "tier": tier}
         )
         
@@ -69,23 +74,57 @@ class BillingService:
     async def cancel_subscription(self, user_id: UUID):
         team = await self._get_user_team(user_id)
         
-        if not team.stripe_subscription_id:
-            raise HTTPException(status_code=400, detail="No active subscription")
+        # Query the latest active or trialing subscription for this team
+        result = await self.db.execute(
+            select(Subscription)
+            .where(
+                Subscription.team_id == team.id,
+                Subscription.status.in_([SubscriptionStatus.ACTIVE.value, SubscriptionStatus.TRIALING.value])
+            )
+            .order_by(Subscription.created_at.desc())
+        )
+        active_sub = result.scalars().first()
         
-        stripe.Subscription.modify(
-            team.stripe_subscription_id,
+        if not active_sub:
+            raise HTTPException(status_code=400, detail="No active subscription found to cancel")
+        
+        # Tell Stripe to cancel at period end
+        await stripe.Subscription.modify_async(
+            active_sub.stripe_subscription_id,
             cancel_at_period_end=True
         )
         
-        team.subscription_status = SubscriptionStatus.CANCELLED.value
+        # Crucial: DO NOT mark it as canceled in your DB immediately if you want them to keep access until the end of the month.
+        # Stripe will fire a `customer.subscription.updated` webhook when this happens, which is where you should update your DB state.
+        # But if you want to pessimistically flag it right now:
+        active_sub.cancel_at_period_end = True
         await self.db.commit()
         
         return {"message": "Subscription will cancel at end of billing period"}
 
     async def get_subscription_status(self, user_id: UUID):
         team = await self._get_user_team(user_id)
+        
+        # Fetch the most recent subscription
+        result = await self.db.execute(
+            select(Subscription)
+            .where(Subscription.team_id == team.id)
+            .order_by(Subscription.created_at.desc())
+        )
+        latest_sub = result.scalars().first()
+        
+        # Fallback if no subscription records exist (Free Tier fallback)
+        if not latest_sub:
+            return {
+                "tier": SubscriptionTier.FREE.value,
+                "status": SubscriptionStatus.ACTIVE.value,
+                "ends_at": None,
+                "cancel_at_period_end": False
+            }
+            
         return {
-            "tier": team.subscription_tier,
-            "status": team.subscription_status,
-            "ends_at": team.subscription_ends_at
+            "tier": latest_sub.tier,
+            "status": latest_sub.status,
+            "ends_at": latest_sub.current_period_end,
+            "cancel_at_period_end": latest_sub.cancel_at_period_end
         }

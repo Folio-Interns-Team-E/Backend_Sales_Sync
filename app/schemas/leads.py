@@ -18,6 +18,14 @@ class LeadUpdate(BaseModel):
     reasoning: Optional[str] = None
 
 
+class LeadPatch(BaseModel):
+    name: Optional[str] = None
+    company: Optional[str] = None
+    title: Optional[str] = None
+    email: Optional[str] = None
+    source: Optional[str] = None
+
+
 class LeadResponse(BaseModel):
     id: UUID
     team_id: UUID

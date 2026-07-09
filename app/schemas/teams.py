@@ -20,6 +20,10 @@ class UpdateRoleRequest(BaseModel):
     role: MemberRole
 
 
+class TeamUpdate(BaseModel):
+    name: str | None = None
+
+
 class MemberResponse(BaseModel):
     id: UUID
     full_name: str

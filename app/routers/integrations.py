@@ -12,6 +12,10 @@ from app.models.user import User
 from app.models.google_credentials import GoogleCredentials
 from app.services.gmail_service import exchange_authorization_code
 from app.config import settings
+from app.schemas.common import ApiResponse
+from app.schemas.calcom import CalComIntegrationCreate, CalComIntegrationResponse
+from app.services.calcom_service import save_or_update_calcom, get_calcom_credentials
+
 
 logger = logging.getLogger(__name__)
 
@@ -102,3 +106,29 @@ async def gmail_status(
             "email": creds.google_email if creds else None,
         },
     }
+
+
+
+@router.post("/calcom", response_model=ApiResponse[CalComIntegrationResponse], status_code=status.HTTP_200_OK)
+async def save_integration(
+    payload: CalComIntegrationCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    Saves or updates the authenticated user's Cal.com integration configurations.
+    """
+    integration = await save_or_update_calcom(
+        db=db, 
+        user_id=current_user.id, 
+        payload=payload
+    )
+    
+    # Map the model instance cleanly to our safe response schema
+    response_data = CalComIntegrationResponse.model_validate(integration)
+    
+    return ApiResponse(
+        success=True,
+        message="Cal.com integration configured successfully.",
+        data=response_data
+    )

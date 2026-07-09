@@ -3,11 +3,12 @@ from typing import Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 from app.models.lead import Lead, LeadStatus
 from app.models.team import Team
 from app.models.team_member import TeamMember
+from app.core.cache import cache_get, cache_set, cache_delete
+from app.schemas.leads import LeadListResponse
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +30,21 @@ class LeadService:
 
     async def list_leads(self, user_id: UUID, status_filter: Optional[str] = None):
         team = await self._get_user_team(user_id)
+        status_key = status_filter or "all"
+        cache_key = f"leads:{team.id}:list:{status_key}"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         query = select(Lead).where(Lead.team_id == team.id)
         if status_filter:
             query = query.where(Lead.status == status_filter)
         query = query.order_by(desc(Lead.created_at))
         result = await self.db.execute(query)
-        return result.scalars().all()
+        leads = result.scalars().all()
+        data = [LeadListResponse.model_validate(lead).model_dump(mode="json") for lead in leads]
+        cache_set(cache_key, data)
+        return data
 
     async def get_lead(self, lead_id: UUID, user_id: UUID):
         team = await self._get_user_team(user_id)
@@ -61,19 +71,21 @@ class LeadService:
         self.db.add(lead)
         await self.db.commit()
         await self.db.refresh(lead)
+        cache_delete(f"leads:{team.id}:list:all")
         return lead
 
     async def update_lead_status(self, lead_id: UUID, user_id: UUID,
-                                  status: str, score: Optional[int] = None,
+                                  lead_status: str, score: Optional[int] = None,
                                   reasoning: Optional[str] = None):
         lead = await self.get_lead(lead_id, user_id)
-        lead.status = status
+        lead.status = lead_status
         if score is not None:
             lead.score = score
         if reasoning is not None:
             lead.ai_context_data = {**(lead.ai_context_data or {}), "reasoning": reasoning}
         await self.db.commit()
         await self.db.refresh(lead)
+        cache_delete(f"leads:{lead.team_id}:list:all")
         return lead
 
     async def discard_lead(self, lead_id: UUID, user_id: UUID):
@@ -82,7 +94,30 @@ class LeadService:
     async def qualify_lead(self, lead_id: UUID, user_id: UUID):
         return await self.update_lead_status(lead_id, user_id, "Qualified")
 
+    async def update_lead(self, lead_id: UUID, user_id: UUID,
+                           name: Optional[str] = None,
+                           company: Optional[str] = None,
+                           title: Optional[str] = None,
+                           email: Optional[str] = None,
+                           source: Optional[str] = None):
+        lead = await self.get_lead(lead_id, user_id)
+        if name is not None:
+            lead.name = name
+        if company is not None:
+            lead.company_name = company
+        if title is not None:
+            lead.job_title = title
+        if email is not None:
+            lead.email = email
+        if source is not None:
+            lead.source = source
+        await self.db.commit()
+        await self.db.refresh(lead)
+        cache_delete(f"leads:{lead.team_id}:list:all")
+        return lead
+
     async def delete_lead(self, lead_id: UUID, user_id: UUID):
         lead = await self.get_lead(lead_id, user_id)
         await self.db.delete(lead)
         await self.db.commit()
+        cache_delete(f"leads:{lead.team_id}:list:all")

@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from app.database import get_db
-from app.schemas.teams import TeamCreate, TeamResponse, InviteRequest, UpdateRoleRequest, JoinTeamRequest, UserTeamResponse
+from app.schemas.teams import TeamCreate, TeamUpdate, TeamResponse, InviteRequest, UpdateRoleRequest, JoinTeamRequest, UserTeamResponse
 from app.schemas.common import ApiResponse
-from app.services.teams_service import create_team, get_team, invite_member, update_member_role, remove_member, join_existing_team, get_team_invite_code, get_user_teams
+from app.services.teams_service import create_team, get_team, update_team, delete_team, invite_member, update_member_role, remove_member, join_existing_team, get_team_invite_code, get_user_teams
 from app.middleware.auth_middleware import get_current_user, require_role
 from app.models.team_member import MemberRole
 
@@ -38,6 +38,29 @@ async def get_team_details(
 ):
     team = await get_team(team_id, current_user, db)
     return ApiResponse(success=True, message="Team fetched successfully", data=team)
+
+#update team
+@router.patch("/{team_id}", response_model=ApiResponse[TeamResponse])
+async def update_team_details(
+    team_id: UUID,
+    payload: TeamUpdate,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    team = await update_team(team_id, payload, current_user, db)
+    return ApiResponse(success=True, message="Team updated successfully", data=team)
+
+
+#delete team
+@router.delete("/{team_id}", response_model=ApiResponse[dict])
+async def delete_team_endpoint(
+    team_id: UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    await delete_team(team_id, current_user, db)
+    return ApiResponse(success=True, message="Team deleted", data={})
+
 
 #team invitation
 @router.post("/invite", response_model=ApiResponse[TeamResponse])

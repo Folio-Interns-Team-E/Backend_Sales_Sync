@@ -9,6 +9,7 @@ from app.models.lead import Lead
 from app.models.team import Team
 from app.models.team_member import TeamMember
 from app.core.s3 import generate_presigned_url, upload_to_s3 as s3_upload
+from app.core.cache import cache_get, cache_set, cache_delete
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,14 @@ class ProposalService:
 
     async def list_proposals(self, user_id: UUID):
         team = await self._get_user_team(user_id)
+        cache_key = f"proposals:{team.id}:list"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            for p in cached:
+                if p.get("file_url") and "amazonaws.com" in p["file_url"]:
+                    p["presigned_url"] = generate_presigned_url(p["file_url"])
+            return cached
+
         query = (
             select(Proposal)
             .outerjoin(Lead, Proposal.lead_id == Lead.id)
@@ -45,10 +54,10 @@ class ProposalService:
         )
         result = await self.db.execute(query)
         proposals = result.scalars().all()
-        for p in proposals:
-            if p.file_url and "amazonaws.com" in p.file_url:
-                p.presigned_url = generate_presigned_url(p.file_url)
-        return proposals
+        from app.schemas.proposals import ProposalResponse
+        data = [ProposalResponse.model_validate(p).model_dump(mode="json") for p in proposals]
+        cache_set(cache_key, data, ttl=60)
+        return data
 
     async def get_proposal(self, proposal_id: UUID, user_id: UUID):
         team = await self._get_user_team(user_id)
@@ -90,6 +99,7 @@ class ProposalService:
         self.db.add(proposal)
         await self.db.commit()
         await self.db.refresh(proposal)
+        cache_delete(f"proposals:{team.id}:list")
         return proposal
 
     async def update_proposal(self, proposal_id: UUID, user_id: UUID,
@@ -114,6 +124,8 @@ class ProposalService:
             proposal.ai_metadata = ai_metadata
         await self.db.commit()
         await self.db.refresh(proposal)
+        team = await self._get_user_team(user_id)
+        cache_delete(f"proposals:{team.id}:list")
         return proposal
 
     def _attach_template_presigned(self, template: ProposalTemplate):
@@ -194,44 +206,45 @@ class ProposalService:
 
     async def delete_proposal(self, proposal_id: UUID, user_id: UUID):
         proposal = await self.get_proposal(proposal_id, user_id)
+        team = await self._get_user_team(user_id)
         await self.db.delete(proposal)
         await self.db.commit()
+        cache_delete(f"proposals:{team.id}:list")
 
     async def update_status(self, proposal_id: UUID, user_id: UUID, new_status: str):
         proposal = await self.get_proposal(proposal_id, user_id)
-        
+
         if new_status not in [s.value for s in ProposalStatus]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid status value"
             )
-        
+
         proposal.status = new_status
         await self.db.commit()
         await self.db.refresh(proposal)
+        team = await self._get_user_team(user_id)
+        cache_delete(f"proposals:{team.id}:list")
         return proposal
-
 
     async def update_outcome(self, proposal_id: UUID, user_id: UUID, outcome: str):
         proposal = await self.get_proposal(proposal_id, user_id)
-        
+
         if outcome not in [o.value for o in ProposalOutcome]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid outcome value"
             )
-        
+
         proposal.outcome = outcome
-        
-        # auto-sync status with outcome
+
         if outcome == ProposalOutcome.WON.value:
             proposal.status = ProposalStatus.ACCEPTED.value
         elif outcome == ProposalOutcome.LOST.value:
             proposal.status = ProposalStatus.REJECTED.value
-        
-        # placeholder: trigger KB update here
-        # await kb_service.store_proposal_outcome(proposal)
-        
+
         await self.db.commit()
         await self.db.refresh(proposal)
+        team = await self._get_user_team(user_id)
+        cache_delete(f"proposals:{team.id}:list")
         return proposal

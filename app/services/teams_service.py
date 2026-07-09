@@ -10,8 +10,9 @@ from app.schemas.teams import (
     TeamCreate, InviteRequest,
     UpdateRoleRequest, JoinTeamRequest,
     TeamResponse, MemberResponse,
-    UserTeamResponse
+    UserTeamResponse, TeamUpdate
 )
+from app.core.cache import cache_get, cache_set, cache_delete, cache_invalidate
 
 
 def _build_team_response(team: Team) -> TeamResponse:
@@ -82,7 +83,9 @@ async def create_team(
     await db.commit()
 
     team = await _get_team_with_members(new_team.id, db)
-    return _build_team_response(team)
+    result = _build_team_response(team)
+    cache_delete(f"teams:{current_user.id}:list")
+    return result
 
 
 async def get_team(
@@ -90,6 +93,11 @@ async def get_team(
         current_user: User,
         db: AsyncSession
 ):
+    cache_key_team = f"team:{team_id}:detail"
+    cached = cache_get(cache_key_team)
+    if cached is not None:
+        return TeamResponse(**cached)
+
     membership = await _get_membership(current_user.id, team_id, db)
     if not membership:
         raise HTTPException(
@@ -103,7 +111,9 @@ async def get_team(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Team not found"
         )
-    return _build_team_response(team)
+    result = _build_team_response(team)
+    cache_set(cache_key_team, result.model_dump(mode="json"))
+    return result
 
 
 async def invite_member(
@@ -142,7 +152,9 @@ async def invite_member(
     await db.commit()
 
     team = await _get_team_with_members(inviter_membership.team_id, db)
-    return _build_team_response(team)
+    result = _build_team_response(team)
+    cache_delete(f"team:{inviter_membership.team_id}:detail")
+    return result
 
 
 async def join_existing_team(
@@ -176,7 +188,9 @@ async def join_existing_team(
     await db.commit()
 
     team = await _get_team_with_members(team.id, db)
-    return _build_team_response(team)
+    result = _build_team_response(team)
+    cache_delete(f"team:{team.id}:detail")
+    return result
 
 
 async def update_member_role(
@@ -210,7 +224,9 @@ async def update_member_role(
     await db.commit()
 
     team = await _get_team_with_members(team_id, db)
-    return _build_team_response(team)
+    result = _build_team_response(team)
+    cache_delete(f"team:{team_id}:detail")
+    return result
 
 
 async def remove_member(
@@ -243,7 +259,9 @@ async def remove_member(
     await db.commit()
 
     team = await _get_team_with_members(team_id, db)
-    return _build_team_response(team)
+    result = _build_team_response(team)
+    cache_delete(f"team:{team_id}:detail")
+    return result
 
 
 async def get_team_invite_code(
@@ -251,6 +269,11 @@ async def get_team_invite_code(
     current_user: User,
     db: AsyncSession
 ):
+    cache_key = f"team:{team_id}:invite_code"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     membership = await _get_membership(current_user.id, team_id, db)
     if not membership:
         raise HTTPException(
@@ -267,7 +290,9 @@ async def get_team_invite_code(
             detail="Team not found"
         )
 
-    return {"invite_code": team.invite_code}
+    data = {"invite_code": team.invite_code}
+    cache_set(cache_key, data)
+    return data
 
 
 async def check_user_has_team(user_id: UUID, db: AsyncSession) -> bool:
@@ -277,7 +302,74 @@ async def check_user_has_team(user_id: UUID, db: AsyncSession) -> bool:
     return result.scalar_one_or_none() is not None
 
 
+async def update_team(
+    team_id: UUID,
+    payload: TeamUpdate,
+    current_user: User,
+    db: AsyncSession
+):
+    membership = await _get_membership(current_user.id, team_id, db)
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this team"
+        )
+
+    result = await db.execute(select(Team).where(Team.id == team_id))
+    team = result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found"
+        )
+
+    if payload.name is not None:
+        team.name = payload.name
+    await db.commit()
+    cache_delete(f"team:{team_id}:detail")
+
+    team = await _get_team_with_members(team_id, db)
+    return _build_team_response(team)
+
+
+async def delete_team(
+    team_id: UUID,
+    current_user: User,
+    db: AsyncSession
+):
+    membership = await _get_membership(current_user.id, team_id, db)
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this team"
+        )
+
+    if membership.role != MemberRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins can delete the team"
+        )
+
+    result = await db.execute(select(Team).where(Team.id == team_id))
+    team = result.scalar_one_or_none()
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found"
+        )
+
+    await db.delete(team)
+    await db.commit()
+    cache_delete(f"team:{team_id}:detail")
+    cache_delete(f"teams:{current_user.id}:list")
+
+
 async def get_user_teams(current_user: User, db: AsyncSession) -> list[UserTeamResponse]:
+    cache_key = f"teams:{current_user.id}:list"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return [UserTeamResponse(**item) for item in cached]
+
     result = await db.execute(
         select(TeamMember)
         .options(selectinload(TeamMember.team))
@@ -285,7 +377,7 @@ async def get_user_teams(current_user: User, db: AsyncSession) -> list[UserTeamR
     )
     memberships = result.scalars().all()
 
-    return [
+    teams = [
         UserTeamResponse(
             id=tm.team.id,
             name=tm.team.name,
@@ -295,3 +387,5 @@ async def get_user_teams(current_user: User, db: AsyncSession) -> list[UserTeamR
         )
         for tm in memberships
     ]
+    cache_set(cache_key, [t.model_dump(mode="json") for t in teams])
+    return teams

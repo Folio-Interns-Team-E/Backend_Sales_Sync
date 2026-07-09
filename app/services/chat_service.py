@@ -9,10 +9,12 @@ from sqlalchemy import select
 from app.models.team import Team
 from app.models.team_member import TeamMember
 from app.models.chat import ChatMessage, ChatRole
+from sqlalchemy import desc
 from app.models.lead import Lead, LeadStatus
 from app.models.meeting import Meeting, MeetingStatus
 from app.services.chat_agents import ChatAgentsService
 from app.services.calcom_service import CalComService
+from app.core.cache import cache_get, cache_set, cache_delete
 
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,59 @@ class ChatService(ChatAgentsService):
 
 
     
+    async def list_messages(self, user_id: UUID):
+        team = await self._get_user_team(user_id)
+        cache_key = f"chat_messages:{team.id}:list"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        result = await self.db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.team_id == team.id)
+            .order_by(desc(ChatMessage.created_at))
+        )
+        messages = result.scalars().all()
+        from app.schemas.chat import ChatMessageResponse
+        data = [ChatMessageResponse.model_validate(m).model_dump(mode="json") for m in messages]
+        cache_set(cache_key, data, ttl=60)
+        return data
+
+    async def get_message(self, message_id: UUID, user_id: UUID):
+        team = await self._get_user_team(user_id)
+        result = await self.db.execute(
+            select(ChatMessage).where(
+                ChatMessage.id == message_id,
+                ChatMessage.team_id == team.id,
+            )
+        )
+        message = result.scalar_one_or_none()
+        if not message:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        return message
+
+    async def update_message(self, message_id: UUID, user_id: UUID, content: str):
+        message = await self.get_message(message_id, user_id)
+        if message.sent_by != ChatRole.USER.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only user messages can be edited"
+            )
+        message.content = content
+        message.metadata_log = {**(message.metadata_log or {}), "edited": True}
+        await self.db.commit()
+        await self.db.refresh(message)
+        team = await self._get_user_team(user_id)
+        cache_delete(f"chat_messages:{team.id}:list")
+        return message
+
+    async def delete_message(self, message_id: UUID, user_id: UUID):
+        message = await self.get_message(message_id, user_id)
+        team = await self._get_user_team(user_id)
+        await self.db.delete(message)
+        await self.db.commit()
+        cache_delete(f"chat_messages:{team.id}:list")
+
     # =====================================================
     # MAIN CHAT ROUTER
     # =====================================================
@@ -361,6 +416,7 @@ class ChatService(ChatAgentsService):
             )
 
             await self.db.commit()
+            cache_delete(f"chat_messages:{team.id}:list")
             return response
 
         except Exception as e:

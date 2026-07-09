@@ -8,6 +8,8 @@ from app.models.email import Email, EmailStatus
 from app.models.lead import Lead
 from app.models.team import Team
 from app.models.team_member import TeamMember
+from app.core.cache import cache_get, cache_set, cache_delete
+from app.schemas.emails import EmailResponse
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +29,32 @@ class EmailService:
         team = result.scalar_one_or_none()
         return team
 
+    async def get_email(self, email_id: UUID, user_id: UUID):
+        team = await self._get_user_team(user_id)
+        result = await self.db.execute(
+            select(Email)
+            .join(Lead, Email.lead_id == Lead.id)
+            .where(Email.id == email_id, Lead.team_id == team.id)
+        )
+        email = result.scalar_one_or_none()
+        if not email:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+        return email
+
     async def list_emails(self, user_id: UUID, lead_id: UUID):
+        cache_key = f"emails:{lead_id}:list"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         team = await self._get_user_team(user_id)
         query = select(Email).where(Email.lead_id == lead_id)
         query = query.order_by(desc(Email.sent_at))
         result = await self.db.execute(query)
-        return result.scalars().all()
+        emails = result.scalars().all()
+        data = [EmailResponse.model_validate(e).model_dump(mode="json") for e in emails]
+        cache_set(cache_key, data)
+        return data
 
     async def create_email(self, user_id: UUID, lead_id: UUID, subject: str,
                            body: str, tone: str = "Professional"):
@@ -45,7 +67,6 @@ class EmailService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
         email = Email(
-           
             lead_id=lead_id,
             subject=subject,
             body=body,
@@ -57,12 +78,12 @@ class EmailService:
         lead.status = "Sent"
         await self.db.commit()
         await self.db.refresh(email)
+        cache_delete(f"emails:{lead_id}:list")
         return email
 
     async def draft_email(self, user_id: UUID, lead_id: UUID, subject: str, body: str):
         team = await self._get_user_team(user_id)
         email = Email(
-          
             lead_id=lead_id,
             subject=subject,
             body=body,
@@ -78,30 +99,50 @@ class EmailService:
             lead.status = "Drafted"
         await self.db.commit()
         await self.db.refresh(email)
+        cache_delete(f"emails:{lead_id}:list")
         return email
-    
+
+    async def update_email(self, email_id: UUID, user_id: UUID,
+                            subject: str | None = None,
+                            body: str | None = None):
+        email = await self.get_email(email_id, user_id)
+        if email.status == EmailStatus.SENT:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot update a sent email"
+            )
+        if subject is not None:
+            email.subject = subject
+        if body is not None:
+            email.body = body
+        await self.db.commit()
+        await self.db.refresh(email)
+        cache_delete(f"emails:{email.lead_id}:list")
+        return email
+
     async def delete_email(self, email_id: UUID, user_id: UUID):
         team = await self._get_user_team(user_id)
-        
-        # fetch email and verify it belongs to this team via lead
+
         result = await self.db.execute(
             select(Email)
             .join(Lead, Email.lead_id == Lead.id)
             .where(Email.id == email_id, Lead.team_id == team.id)
         )
         email = result.scalar_one_or_none()
-        
+
         if not email:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Email not found"
             )
-        
+
         if email.status == EmailStatus.SENT:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot delete a sent email"
             )
-        
+
+        lead_id = email.lead_id
         await self.db.delete(email)
         await self.db.commit()
+        cache_delete(f"emails:{lead_id}:list")

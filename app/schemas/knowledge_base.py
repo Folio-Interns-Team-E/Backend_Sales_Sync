@@ -4,6 +4,12 @@ from uuid import UUID
 from datetime import datetime
 
 
+class KnowledgeAssetUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+
+
 class KnowledgeAssetCreate(BaseModel):
     title: str
     description: Optional[str] = None
