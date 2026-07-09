@@ -12,6 +12,7 @@ dependencies = [
     "fastapi>=0.138.0",
     "httpx>=0.28.1",
     "passlib>=1.7.4",
+    "psycopg2-binary>=2.9.12",
     "pydantic-settings>=2.14.2",
     "pydantic[email]>=2.13.4",
     "python-docx>=1.2.0",
