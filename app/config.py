@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     aws_bucket_name: str = ""
     aws_region: str = ""
+
+    cal_api_key: str = ""
+    cal_event_type_id: str = ""
     
     # app
     app_env: str = "development"

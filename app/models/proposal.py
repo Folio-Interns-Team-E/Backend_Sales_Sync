@@ -25,7 +25,7 @@ class Proposal(Base):
     __tablename__ = "proposals"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
+   
     lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True)
 
     company = Column(String, nullable=False)
@@ -47,7 +47,7 @@ class Proposal(Base):
         CheckConstraint("outcome IN ('Open', 'Won', 'Lost')", name="check_proposal_outcome"),
     )
 
-    team = relationship("Team", back_populates="proposals")
+
     lead = relationship("Lead", back_populates="proposals")
     revisions = relationship("ProposalRevision", back_populates="proposal", cascade="all, delete-orphan", order_by="desc(ProposalRevision.revision_num)")
 
