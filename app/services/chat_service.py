@@ -278,6 +278,56 @@ class ChatService(ChatAgentsService):
                             f"and marked as `{MeetingStatus.CANCELLED.value}` locally."
                         )
 
+            elif action == "GENERATE_PROPOSAL":
+                import os
+                
+                # 1. Compile textual layout payload maps via Groq
+                title, raw_proposal_json = await self._compile_proposal_data(message, icp)
+                
+                # 2. Build the structural .docx stream layout block array in memory
+                file_bytes_stream = self.create_proposal_document(title, raw_proposal_json)
+                
+                # 3. Save the file directly to the local disk server volume
+                storage_dir = "./storage/proposals"
+                os.makedirs(storage_dir, exist_ok=True)
+                
+                # Create a clean file name and file path
+                safe_title = title.replace(" ", "_")
+                file_name = f"{safe_title}.docx"
+                file_path = os.path.join(storage_dir, file_name)
+                
+                # Write the memory buffer bytes onto disk
+                with open(file_path, "wb") as f:
+                    f.write(file_bytes_stream.getbuffer())
+                    
+                logger.info(f"Proposal successfully saved to server disk at: {file_path}")
+
+                # 4. Extract sections to display preview text right inside the chat window
+                exec_summary = raw_proposal_json.get("executive_summary", "")
+                problem_stmt = raw_proposal_json.get("problem_statement", "")
+                solution = raw_proposal_json.get("proposed_solution", "")
+                pricing = raw_proposal_json.get("investment_and_pricing", "")
+
+                # Point the link to your local dynamic download endpoint
+                download_link = f"/api/proposals/download/{file_name}" 
+                
+                response = (
+                    f"### 📄 Generated Proposal: {title.replace('_', ' ')}\n"
+                    f"💾 *Saved to server disk path: `{file_path}`*\n\n"
+                    f"📥 **[Download Word Document (.docx)]({download_link})**\n\n"
+                    f"--- \n\n"
+                    f"#### **1. Executive Summary**\n"
+                    f"{exec_summary}\n\n"
+                    f"#### **2. Problem Statement & Operational Context**\n"
+                    f"{problem_stmt}\n\n"
+                    f"#### **3. Strategic Roadmap & Proposed Solution**\n"
+                    f"{solution}\n\n"
+                    f"#### **4. Commercial Terms & Financial Scope**\n"
+                    f"{pricing}\n\n"
+                    f"--- \n"
+                    f"*The full document has been compiled and safely written to storage.*"
+                )
+
             else:
                 response = "I can help you search for prospects, analyze individuals, or modify your ICP. What would you like to do?"
 
