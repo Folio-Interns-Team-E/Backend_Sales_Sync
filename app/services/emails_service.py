@@ -79,3 +79,29 @@ class EmailService:
         await self.db.commit()
         await self.db.refresh(email)
         return email
+    
+    async def delete_email(self, email_id: UUID, user_id: UUID):
+        team = await self._get_user_team(user_id)
+        
+        # fetch email and verify it belongs to this team via lead
+        result = await self.db.execute(
+            select(Email)
+            .join(Lead, Email.lead_id == Lead.id)
+            .where(Email.id == email_id, Lead.team_id == team.id)
+        )
+        email = result.scalar_one_or_none()
+        
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Email not found"
+            )
+        
+        if email.status == EmailStatus.SENT:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete a sent email"
+            )
+        
+        await self.db.delete(email)
+        await self.db.commit()

@@ -42,3 +42,13 @@ async def draft_email(
     service = EmailService(db)
     email = await service.draft_email(current_user.id, payload.lead_id, payload.subject, payload.body)
     return ApiResponse(success=True, message="Email drafted successfully", data=email)
+
+@router.delete("/{email_id}", response_model=ApiResponse[dict])
+async def delete_email(
+    email_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = EmailService(db)
+    await service.delete_email(email_id, current_user.id)
+    return ApiResponse(success=True, message="Email deleted", data={})

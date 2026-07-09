@@ -1,17 +1,9 @@
-from sqlalchemy import Column, String, DateTime, Enum
+from sqlalchemy import Column, String, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
 import uuid
-import enum
-
-
-class UserRole(enum.Enum):
-    admin = "admin"
-    manager = "manager"
-    rep = "rep"
-
 
 class User(Base):
     __tablename__ = "users"
@@ -30,4 +22,3 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan"
     )
-

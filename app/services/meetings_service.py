@@ -54,6 +54,7 @@ class MeetingService:
         meeting = Meeting(
             team_id=team.id,
             lead_id=lead_id,
+            created_by = user_id,
             client=client,
             company=company,
             date=meeting_date,

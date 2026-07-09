@@ -3,9 +3,12 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
+import enum
 
-from app.models.user import UserRole
-
+class MemberRole(enum.Enum):
+    admin = "admin"
+    manager = "manager"
+    rep = "rep"
 
 class TeamMember(Base):
     __tablename__ = "team_members"
@@ -23,8 +26,9 @@ class TeamMember(Base):
     )
 
     role = Column(
-        Enum(UserRole),
-        default=UserRole.manager
+        Enum(MemberRole),
+        default=MemberRole.rep,
+        nullable=False
     )
 
     joined_at = Column(

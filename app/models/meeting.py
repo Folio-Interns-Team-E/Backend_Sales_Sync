@@ -58,6 +58,14 @@ class Meeting(Base):
     )
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    created_by = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+    
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # 🛑 Postgres-level Check Constraint to guarantee status values match your business rules
@@ -71,3 +79,4 @@ class Meeting(Base):
     # 🔄 Relationships
    
     lead = relationship("Lead", back_populates="meetings")
+    creator = relationship("User", foreign_keys=[created_by])

@@ -15,8 +15,6 @@ class Email(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     
-  
-    
     # 🔗 Links this email directly to the recipient lead
     lead_id = Column(
         UUID(as_uuid=True), 

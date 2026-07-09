@@ -51,3 +51,47 @@ async def get_onboarding_status(
             completed=status_data["completed"],
         ),
     )
+
+@router.get("/icp", response_model=ApiResponse[OnboardingResponse])
+async def get_icp(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = OnboardingService(db)
+    status_data = await service.get_onboarding(current_user.id)
+    return ApiResponse(
+        success=True,
+        message="ICP fetched successfully",
+        data=OnboardingResponse(
+            success=True,
+            message="ICP fetched",
+            icp=status_data["icp"],
+            completed=status_data["completed"],
+        ),
+    )
+
+
+@router.put("/icp", response_model=ApiResponse[OnboardingResponse])
+async def update_icp(
+    request: OnboardingRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = OnboardingService(db)
+    icp_text = await service.update_onboarding(
+        current_user.id,
+        request.product_name,
+        request.product_description,
+        request.target_customer,
+        request.goals,
+    )
+    return ApiResponse(
+        success=True,
+        message="ICP updated successfully",
+        data=OnboardingResponse(
+            success=True,
+            message="ICP updated",
+            icp=icp_text,
+            completed=True,
+        ),
+    )

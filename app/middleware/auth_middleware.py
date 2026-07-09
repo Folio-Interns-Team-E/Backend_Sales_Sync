@@ -4,8 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from uuid import UUID
 from app.database import get_db
-from app.models.user import User, UserRole
-from app.models.team_member import TeamMember
+from app.models.user import User
+from app.models.team_member import TeamMember, MemberRole
 from app.core.security import decode_access_token
 
 bearer_scheme = HTTPBearer()
@@ -58,7 +58,7 @@ async def get_current_user(
     return user
 
 
-def require_role(*roles: UserRole):
+def require_role(*roles: MemberRole):
     async def role_checker(
         current_user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_db)

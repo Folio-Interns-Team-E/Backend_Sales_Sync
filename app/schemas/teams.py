@@ -1,7 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from uuid import UUID
 from datetime import datetime
-from app.models.user import UserRole
+from app.models.team_member import MemberRole
 
 
 class TeamCreate(BaseModel):
@@ -17,14 +17,14 @@ class InviteRequest(BaseModel):
 
 
 class UpdateRoleRequest(BaseModel):
-    role: UserRole
+    role: MemberRole
 
 
 class MemberResponse(BaseModel):
     id: UUID
     full_name: str
     email: EmailStr
-    role: UserRole
+    role: MemberRole
 
     class Config:
         from_attributes = True
@@ -46,7 +46,7 @@ class UserTeamResponse(BaseModel):
     name: str
     invite_code: str
     created_at: datetime
-    role: UserRole
+    role: MemberRole
 
     class Config:
         from_attributes = True
