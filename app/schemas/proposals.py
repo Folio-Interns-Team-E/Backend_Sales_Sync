@@ -5,52 +5,34 @@ from datetime import datetime
 
 
 class ProposalCreate(BaseModel):
+    file_url: str
     lead_id: Optional[UUID] = None
-    company: str
-    title: str = "New Proposal"
-    summary: Optional[str] = None
-    value: Optional[float] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
+    template_id: Optional[UUID] = None
+    ai_metadata: Optional[dict] = None
 
 
 class ProposalUpdate(BaseModel):
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    value: Optional[float] = None
-    #status: Optional[str] = None
-    #outcome: Optional[str] = None
-
-
-class ProposalRevisionCreate(BaseModel):
-    title: str
-    summary: str
-    value: Optional[float] = None
-    note: str = ""
-
-
-class ProposalRevisionResponse(BaseModel):
-    id: UUID
-    proposal_id: UUID
-    revision_num: int
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    value: Optional[float] = None
-    edited_by: Optional[UUID] = None
-    note: Optional[str] = None
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
+    file_url: Optional[str] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
+    lead_id: Optional[UUID] = None
+    template_id: Optional[UUID] = None
+    ai_metadata: Optional[dict] = None
 
 
 class ProposalResponse(BaseModel):
     id: UUID
-    team_id: UUID
     lead_id: Optional[UUID] = None
-    company: str
-    title: str
-    summary: Optional[str] = None
-    value: Optional[float] = None
+    template_id: Optional[UUID] = None
     status: str
     outcome: str
+    file_url: str
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
+    version: int
+    ai_metadata: dict
     sent_at: Optional[datetime] = None
     responded_at: Optional[datetime] = None
     created_at: datetime
@@ -61,18 +43,18 @@ class ProposalResponse(BaseModel):
 
 class ProposalTemplateUpdate(BaseModel):
     template_name: Optional[str] = None
-    company_name: Optional[str] = None
-    logo_url: Optional[str] = None
-    sections: Optional[list[dict]] = None
+    file_url: Optional[str] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
 
 
 class ProposalTemplateResponse(BaseModel):
     id: UUID
     team_id: UUID
     template_name: str
-    company_name: Optional[str] = None
-    logo_url: Optional[str] = None
-    sections: list[dict] = []
+    file_url: str
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 

@@ -6,7 +6,6 @@ from app.middleware.auth_middleware import get_current_user
 from app.models.user import User
 from app.schemas.proposals import (
     ProposalCreate, ProposalUpdate, ProposalOutcomeUpdate, ProposalStatusUpdate, ProposalResponse,
-    ProposalRevisionCreate, ProposalRevisionResponse,
     ProposalTemplateUpdate, ProposalTemplateResponse,
 )
 from app.schemas.common import ApiResponse
@@ -44,8 +43,9 @@ async def create_proposal(
 ):
     service = ProposalService(db)
     proposal = await service.create_proposal(
-        current_user.id, payload.company, payload.title,
-        payload.summary, payload.value, payload.lead_id
+        current_user.id, payload.file_url, payload.lead_id,
+        payload.file_type, payload.file_size,
+        payload.template_id, payload.ai_metadata,
     )
     return ApiResponse(success=True, message="Proposal created successfully", data=proposal)
 
@@ -59,25 +59,11 @@ async def update_proposal(
 ):
     service = ProposalService(db)
     proposal = await service.update_proposal(
-        proposal_id, current_user.id, payload.title,
-        payload.summary, payload.value
+        proposal_id, current_user.id, payload.file_url,
+        payload.file_type, payload.file_size, payload.lead_id,
+        payload.template_id, payload.ai_metadata,
     )
     return ApiResponse(success=True, message="Proposal updated successfully", data=proposal)
-
-
-@router.post("/{proposal_id}/revisions", response_model=ApiResponse[ProposalRevisionResponse], status_code=201)
-async def add_revision(
-    proposal_id: UUID,
-    payload: ProposalRevisionCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    service = ProposalService(db)
-    revision = await service.add_revision(
-        proposal_id, current_user.id, payload.title,
-        payload.summary, payload.value, payload.note
-    )
-    return ApiResponse(success=True, message="Revision saved", data=revision)
 
 
 @router.get("/template", response_model=ApiResponse[ProposalTemplateResponse])
@@ -101,7 +87,7 @@ async def upsert_template(
     service = ProposalService(db)
     template = await service.upsert_template(
         current_user.id, payload.template_name,
-        payload.company_name, payload.logo_url, payload.sections
+        payload.file_url, payload.file_type, payload.file_size,
     )
     return ApiResponse(success=True, message="Template saved", data=template)
 

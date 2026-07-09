@@ -36,7 +36,7 @@ class Meeting(Base):
     calendar_event_id = Column(String, nullable=True)
 
     # 📝 Content & AI Input Sandbox
-    agenda = Column(JSONB, server_default='[]', nullable=False)      # e.g., ["Intro", "Demo"]
+    agenda = Column(Text, nullable=True)      # e.g., ["Intro", "Demo"]
 
     notes = Column(Text, nullable=True)
 

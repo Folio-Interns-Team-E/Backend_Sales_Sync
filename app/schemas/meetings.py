@@ -1,41 +1,40 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 from uuid import UUID
 from datetime import datetime, date, time
 
 
 class MeetingCreate(BaseModel):
-    lead_id: Optional[UUID] = None
-    client: str
-    company: Optional[str] = None
+    lead_id: UUID
     date: date
     time: time
-    duration: str = "30 minutes"
-    agenda: list[str] = []
+    timezone: str = "UTC"
+    calendar_event_id: Optional[str] = None
+    agenda: Optional[str] = None
     notes: Optional[str] = None
 
 
 class MeetingUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
-    transcript: Optional[list[str]] = None
-    agenda: Optional[list[str]] = None
+    agenda: Optional[str] = None
+    date: Optional[date] = None
+    time: Optional[time] = None
+    timezone: Optional[str] = None
+    calendar_event_id: Optional[str] = None
 
 
 class MeetingResponse(BaseModel):
     id: UUID
-    team_id: UUID
-    lead_id: Optional[UUID] = None
-    client: Optional[str] = None
-    company: Optional[str] = None
+    lead_id: UUID
     date: date
     time: time
-    duration: Optional[str] = None
     timezone: str
-    agenda: list[str]
-    transcript: list[str]
+    calendar_event_id: Optional[str] = None
+    agenda: Optional[str] = None
     notes: Optional[str] = None
     status: str
+    created_by: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
 

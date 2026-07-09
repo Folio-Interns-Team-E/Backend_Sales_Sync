@@ -4,7 +4,7 @@ from app.models.team_member import TeamMember, MemberRole
 from app.models.lead import Lead, LeadStatus
 from app.models.email import Email, EmailStatus
 from app.models.meeting import Meeting, MeetingStatus
-from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome, ProposalTemplate, ProposalRevision
+from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome, ProposalTemplate
 from app.models.knowledge_base import KnowledgeAsset
 from app.models.chat import ChatMessage, ChatRole
 
@@ -24,7 +24,7 @@ __all__ = [
     "ProposalStatus",
     "ProposalOutcome",
     "ProposalTemplate",
-    "ProposalRevision",
+
     "KnowledgeAsset",
     "ChatMessage",
     "ChatRole",

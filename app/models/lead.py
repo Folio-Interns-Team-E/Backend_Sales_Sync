@@ -49,3 +49,5 @@ class Lead(Base):
     proposals = relationship("Proposal", back_populates="lead")
     meetings = relationship("Meeting", back_populates="lead")
     emails = relationship("Email", back_populates="lead")
+
+    pool_origin_id = Column(UUID(as_uuid=True), nullable=True)

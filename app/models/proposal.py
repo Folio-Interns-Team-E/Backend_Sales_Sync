@@ -28,11 +28,12 @@ class Proposal(Base):
    
     lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    company = Column(String, nullable=False)
-    title = Column(String, nullable=False)
-    summary = Column(Text, nullable=True)
-    value = Column(Numeric(precision=12, scale=2), nullable=True)
-    sources = Column(JSONB, default=[], nullable=False)
+    template_id = Column(
+        UUID(as_uuid=True), 
+        ForeignKey("proposal_templates.id", ondelete="SET NULL"), 
+        nullable=True, 
+        index=True
+    )
 
     status = Column(String, default=ProposalStatus.DRAFT.value, nullable=False, index=True)
     outcome = Column(String, default=ProposalOutcome.OPEN.value, nullable=False, index=True)
@@ -46,26 +47,15 @@ class Proposal(Base):
         CheckConstraint("status IN ('Draft', 'Sent', 'Under Review', 'Accepted', 'Rejected')", name="check_proposal_status"),
         CheckConstraint("outcome IN ('Open', 'Won', 'Lost')", name="check_proposal_outcome"),
     )
+    file_url = Column(String, nullable=False)   # S3 URL
+    file_type = Column(String, nullable=True)   # pdf, docx etc
+    file_size = Column(Integer, nullable=True)
 
+    ai_metadata = Column(JSONB, default={}, nullable=False)
 
     lead = relationship("Lead", back_populates="proposals")
-    revisions = relationship("ProposalRevision", back_populates="proposal", cascade="all, delete-orphan", order_by="desc(ProposalRevision.revision_num)")
-
-
-class ProposalRevision(Base):
-    __tablename__ = "proposal_revisions"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    proposal_id = Column(UUID(as_uuid=True), ForeignKey("proposals.id", ondelete="CASCADE"), nullable=False, index=True)
-    revision_num = Column(Integer, nullable=False, default=1)
-    title = Column(String, nullable=True)
-    summary = Column(Text, nullable=True)
-    value = Column(Numeric(precision=12, scale=2), nullable=True)
-    edited_by = Column(UUID(as_uuid=True), nullable=True)
-    note = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    proposal = relationship("Proposal", back_populates="revisions")
+    version = Column(Integer, nullable=False, default=1)
+    template = relationship("ProposalTemplate", back_populates="proposals")
 
 
 class ProposalTemplate(Base):
@@ -74,10 +64,11 @@ class ProposalTemplate(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
     template_name = Column(String, nullable=False)
-    company_name = Column(String, nullable=True)
-    logo_url = Column(String, nullable=True)
-    sections = Column(JSONB, server_default='[]', nullable=False)
+    file_url = Column(String, nullable=False)   # S3 URL
+    file_type = Column(String, nullable=True)   # pdf, docx etc
+    file_size = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     team = relationship("Team", back_populates="proposal_templates")
+    proposals = relationship("Proposal", back_populates="template")

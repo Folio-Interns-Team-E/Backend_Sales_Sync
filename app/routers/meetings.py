@@ -40,9 +40,9 @@ async def create_meeting(
 ):
     service = MeetingService(db)
     meeting = await service.create_meeting(
-        current_user.id, payload.client, payload.company,
-        payload.date, payload.time, payload.duration,
-        payload.agenda, payload.notes, payload.lead_id
+        current_user.id, payload.lead_id,
+        payload.date, payload.time, payload.timezone,
+        payload.calendar_event_id, payload.agenda, payload.notes,
     )
     return ApiResponse(success=True, message="Meeting created successfully", data=meeting)
 
@@ -57,7 +57,8 @@ async def update_meeting(
     service = MeetingService(db)
     meeting = await service.update_meeting(
         meeting_id, current_user.id, payload.status,
-        payload.notes, payload.transcript, payload.agenda
+        payload.notes, payload.agenda, payload.date,
+        payload.time, payload.timezone, payload.calendar_event_id,
     )
     return ApiResponse(success=True, message="Meeting updated successfully", data=meeting)
 
