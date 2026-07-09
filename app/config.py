@@ -25,6 +25,13 @@ class Settings(BaseSettings):
 
     google_client_id: str = ""
     google_client_secret: str = ""
+
+    # stripe
+    stripe_secret_key: str = ""
+    stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_growth_price: str = ""
+    stripe_enterprise_price: str = ""
     
     # app
     app_env: str = "development"

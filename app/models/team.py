@@ -5,6 +5,20 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 import uuid
 import secrets
+import enum
+
+
+class SubscriptionTier(str, enum.Enum):
+    FREE = "free"
+    GROWTH = "growth"
+    ENTERPRISE = "enterprise"
+
+
+class SubscriptionStatus(str, enum.Enum):
+    ACTIVE = "active"
+    CANCELLED = "cancelled"
+    PAST_DUE = "past_due"
+    TRIALING = "trialing"
 
 
 class Team(Base):
@@ -15,14 +29,20 @@ class Team(Base):
 
     icp = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-   
+    
     invite_code = Column(
         String,
         unique=True,
         nullable=False,
         default=lambda: secrets.token_urlsafe(8)
     )
+    
+    # Stripe subscription fields
+    stripe_customer_id = Column(String, nullable=True, unique=True)
+    stripe_subscription_id = Column(String, nullable=True, unique=True)
+    subscription_tier = Column(String, default=SubscriptionTier.FREE.value, nullable=False)
+    subscription_status = Column(String, default=SubscriptionStatus.ACTIVE.value, nullable=False)
+    subscription_ends_at = Column(DateTime(timezone=True), nullable=True)
 
   
     members = relationship(
