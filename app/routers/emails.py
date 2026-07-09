@@ -4,9 +4,12 @@ from uuid import UUID
 from app.database import get_db
 from app.middleware.auth_middleware import get_current_user
 from app.models.user import User
+from app.models.lead import Lead
 from app.schemas.emails import EmailCreate, EmailResponse
 from app.schemas.common import ApiResponse
 from app.services.emails_service import EmailService
+from app.services.gmail_service import send_email_on_behalf_of_user
+from sqlalchemy import select
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
@@ -30,6 +33,18 @@ async def send_email(
 ):
     service = EmailService(db)
     email = await service.create_email(current_user.id, payload.lead_id, payload.subject, payload.body, payload.tone)
+
+    try:
+        result = await db.execute(select(Lead).where(Lead.id == payload.lead_id))
+        lead = result.scalar_one_or_none()
+        if lead and lead.email:
+            await send_email_on_behalf_of_user(
+                db, current_user.id, lead.email, payload.subject, payload.body,
+            )
+    except Exception as e:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning(f"Gmail send failed for user {current_user.id}: {e}")
+
     return ApiResponse(success=True, message="Email sent successfully", data=email)
 
 

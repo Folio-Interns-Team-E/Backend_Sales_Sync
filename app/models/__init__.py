@@ -7,6 +7,7 @@ from app.models.meeting import Meeting, MeetingStatus
 from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome, ProposalTemplate
 from app.models.knowledge_base import KnowledgeAsset
 from app.models.chat import ChatMessage, ChatRole
+from app.models.google_credentials import GoogleCredentials
 
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "KnowledgeAsset",
     "ChatMessage",
     "ChatRole",
+    "GoogleCredentials",
 ]

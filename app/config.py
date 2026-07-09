@@ -22,6 +22,9 @@ class Settings(BaseSettings):
 
     cal_api_key: str = ""
     cal_event_type_id: str = ""
+
+    google_client_id: str = ""
+    google_client_secret: str = ""
     
     # app
     app_env: str = "development"

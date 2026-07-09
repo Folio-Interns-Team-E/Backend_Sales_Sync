@@ -3,7 +3,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from app.routers import auth, teams, onboarding, leads, emails, meetings, proposals, knowledge_base, chat
+from app.routers import auth, teams, onboarding, leads, emails, meetings, proposals, knowledge_base, chat, integrations
 from app.database import engine, Base
 from app.config import settings
 from app.models import team, user
@@ -34,6 +34,7 @@ app.include_router(meetings.router)
 app.include_router(proposals.router)
 app.include_router(knowledge_base.router)
 app.include_router(chat.router)
+app.include_router(integrations.router)
 
 
 @app.exception_handler(HTTPException)
