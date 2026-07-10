@@ -281,7 +281,7 @@ class ChatService(ChatAgentsService):
                         start_time=start_time_dt,
                         name=existing_lead.name,
                         email=existing_lead.email,
-                        agenda=[f"AI Agent Automated Demo Routing with {existing_lead.company_name}"]
+                        agenda=", ".join([f"AI Agent Automated Demo Routing with {existing_lead.company_name}"])
                     )
                     
                     response = (

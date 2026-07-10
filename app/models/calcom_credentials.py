@@ -18,5 +18,13 @@ class CalComIntegration(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    team_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("teams.id", ondelete="CASCADE"),
+        nullable=True,  # Kept nullable for now
+        index=True,
+    )
+
     # Relationship back to the User
     user = relationship("User", back_populates="calcom_integration")
+    team = relationship("Team", back_populates="calcom_integration")

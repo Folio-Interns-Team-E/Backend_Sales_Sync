@@ -19,6 +19,13 @@ class GoogleCredentials(Base):
         index=True,
     )
 
+    team_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("teams.id", ondelete="CASCADE"),
+        nullable=True,  # Kept nullable for now
+        index=True,
+    )
+
     google_email = Column(String, nullable=False)
     refresh_token = Column(String, nullable=False)
 
@@ -26,3 +33,4 @@ class GoogleCredentials(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     user = relationship("User", back_populates="google_credentials")
+    team = relationship("Team", back_populates="google_credentials")
