@@ -27,4 +27,5 @@ class CalComIntegration(Base):
 
     # Relationship back to the User
     user = relationship("User", back_populates="calcom_integration")
-    team = relationship("Team", back_populates="calcom_integration")
+    team = relationship("Team", back_populates="calcom_integrations")
+    
