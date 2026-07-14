@@ -1,45 +1,80 @@
+import io
 import json
-import re
 import logging
+from typing import List, Optional
 from uuid import UUID
+from pydantic import BaseModel, Field
 
-import httpx
+from crewai import Agent, Task, Crew, Process, LLM
+from crewai.tools import tool
+
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
-from sqlalchemy import String
+from sqlalchemy import select, or_, String
 
 from app.config import settings
 from app.models.leads_pool import LeadPool
 from app.models.lead import Lead
-import io
+
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-
 
 logger = logging.getLogger(__name__)
 
+# =====================================================
+# 1. STRUCTURED OUTPUT SCHEMAS (Replaces regex/JSON strings)
+# =====================================================
+
+class FitScoreResult(BaseModel):
+    score: int = Field(description="Objective fit score between 0 and 100.")
+    justification: str = Field(description="A clear, concise 2-sentence explanation of why they received this score.")
+
+class CustomEmailResult(BaseModel):
+    subject: str = Field(description="Compelling, short email subject line.")
+    body: str = Field(description="The personalized body text of the email.")
+
+class ProposalDataResult(BaseModel):
+    document_title: str = Field(description="A short clean file-safe title (e.g., SalesSync_Acme_Growth_Proposal).")
+    executive_summary: str = Field(description="Deep, highly persuasive 1-2 paragraph executive hook highlighting key business drivers.")
+    problem_statement: str = Field(description="A technical breakdown of client operational pain points and functional bottlenecks.")
+    proposed_solution: str = Field(description="A detailed step-by-step resolution strategy highlighting technical architecture and deliverables.")
+    investment_and_pricing: str = Field(description="Clear commercial pricing packages, implementation tier estimates, or milestone billing timelines.")
+
+class ActionExtractionResult(BaseModel):
+    action: str = Field(description="Must be one of: UPDATE_ICP, GET_LEADS, ANALYZE_LEAD, DRAFT_EMAIL, CREATE_MEETING, CANCEL_MEETING, GENERATE_PROPOSAL, NORMAL")
+    keywords: Optional[List[str]] = Field(default=[], description="List of titles/roles/queries/names parsed from user message.")
+    industry: Optional[List[str]] = Field(default=[], description="List of industries parsed from user message.")
+    country: Optional[List[str]] = Field(default=[], description="List of countries parsed from user message.")
+    limit: int = Field(default=20, description="Limit of search results requested, max 50.")
+    start_time: Optional[str] = Field(default=None, description="ISO 8601 timestamp (YYYY-MM-DDTHH:MM:SS) if scheduling a meeting.")
+
+
+# =====================================================
+# 2. THE CREWAI SERVICE CLASS
+# =====================================================
 
 class ChatAgentsService:
-
-    BASE_URL = "https://api.groq.com/openai/v1"
     MODEL = "llama-3.3-70b-versatile"
-
     def __init__(self, db: AsyncSession):
         self.db = db
+        # Set up LLM utilizing Groq API credentials through LangChain's OpenAI adaptation
+        self.llm = LLM(
+            model="groq/llama-3.3-70b-versatile",
+            api_key=settings.grok_api_key,
+            temperature=0.0
+        )
 
     # =====================================================
-    # LEAD SEARCH FUNCTION (Kept exactly as original)
+    # DATABASE UTILITIES (Decorated as CrewAI Tools)
     # =====================================================
-    async def search_leads(self, filters: dict, limit: int = 20):
+    @tool("Search Prospects Tool")
+    async def search_leads(self, filters: dict, limit: int = 20) -> list:
+        """Search prospect pool using keywords, industries, and countries."""
         conditions = []
-
         keywords = filters.get("keywords", [])
         industries = filters.get("industry", [])
         countries = filters.get("country", [])
 
-        # Search titles + keywords + company
         for word in keywords:
             conditions.append(LeadPool.title.ilike(f"%{word}%"))
             conditions.append(LeadPool.company_name.ilike(f"%{word}%"))
@@ -54,201 +89,163 @@ class ChatAgentsService:
                 conditions.append(LeadPool.country.ilike(f"%{country}%"))
 
         query = select(LeadPool).where(or_(*conditions)).limit(limit)
-
         result = await self.db.execute(query)
         leads = result.scalars().all()
-
-        return leads
+        return [
+            {"id": str(lead.id), "title": lead.title, "company_name": lead.company_name, "industry": lead.industry, "country": lead.country}
+            for lead in leads
+        ]
 
     # =====================================================
-    # NEW: AI FIT SCORING GENERATOR
+    # AGENTIC WORKFLOWS
     # =====================================================
-    async def _generate_fit_score(self, lead_info: dict, icp: str) -> dict:
-        """Compares a fetched lead profile against the ICP to yield an objective score."""
-        prompt = f"""You are an expert sales operations analyst. Evaluate the target lead data against the company's Ideal Customer Profile (ICP).
 
-                Company ICP:
-                \"\"\"
-                {icp}
-                \"\"\"
+    async def generate_fit_score(self, lead_info: dict, icp: str) -> FitScoreResult:
+        """Evaluates a lead profile against target ICP and produces an objective score."""
+        analyst_agent = Agent(
+            role="Sales Operations Analyst",
+            goal="Analyze prospect compatibility objectively against our Ideal Customer Profile.",
+            backstory="You are a data-driven sales ops expert who scores incoming opportunities based on strategic alignment.",
+            verbose=False,
+            allow_delegation=False,
+            llm=self.llm
+        )
 
-                Target Lead Data:
-                \"\"\"
-                {json.dumps(lead_info, indent=2)}
-                \"\"\"
+        qualification_task = Task(
+            description=(
+                f"Evaluate the target lead data against the company's Ideal Customer Profile (ICP).\n\n"
+                f"Company ICP:\n{icp}\n\n"
+                f"Target Lead Data:\n{json.dumps(lead_info, indent=2)}\n\n"
+                "Provide an objective analysis and score."
+            ),
+            expected_output="A structured objective analysis containing fit score and 2-sentence justification.",
+            agent=analyst_agent,
+            output_json=FitScoreResult
+        )
 
-                Provide an objective analysis. Return ONLY a valid JSON object matching this schema:
-                {{
-                    "score": 85,
-                    "justification": "A clear, concise 2-sentence explanation of why they received this score based on the ICP context."
-                }}
-                """
-        payload = {
-            "model": self.MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": 300,
-            "response_format": {"type": "json_object"}
-        }
+        crew = Crew(
+            agents=[analyst_agent],
+            tasks=[qualification_task],
+            process=Process.sequential
+        )
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.grok_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"].strip()
-            
-            cleaned = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.IGNORECASE)
-            parsed = json.loads(cleaned)
-            
-            # 🔍 Debug log to inspect raw LLM behavior in your console
-            logger.info(f"Raw LLM Qualification Output: {parsed}")
-            
-            # Extract score safely even if the LLM names it 'fit_score' or returns a string
-            raw_score = parsed.get("score") or parsed.get("fit_score") or 0
-            try:
-                score_val = int(raw_score)
-            except (ValueError, TypeError):
-                score_val = 0
-                
-            return {
-                "score": score_val,
-                "justification": parsed.get("justification", "No evaluation details provided.")
-            }
+        result = crew.kickoff()
+        # Returns parsed Pydantic object
+        return result.json_dict if hasattr(result, 'json_dict') else json.loads(result.raw)
+
+
+    async def generate_custom_email(self, lead_info: dict, icp: str) -> CustomEmailResult:
+        """Generates a highly personalized cold outbound email based on lead data."""
+        sdr_agent = Agent(
+            role="Elite B2B Sales Development Representative",
+            goal="Draft high-converting personalized cold emails to prospects based on targeting criteria.",
+            backstory="You write clear, short, personalized outreach emails with strong hooks that never sound templated.",
+            verbose=False,
+            allow_delegation=False,
+            llm=self.llm
+        )
+
+        email_task = Task(
+            description=(
+                f"Write a tailored B2B outreach email to the target lead below based on company ICP context.\n\n"
+                f"Company ICP Context:\n{icp}\n\n"
+                f"Target Lead Data:\n{json.dumps(lead_info, indent=2)}\n\n"
+                "Guidelines:\n"
+                "1. Keep it professional, relevant, and short (under 150 words).\n"
+                "2. Directly hook their specific role, company, or background details.\n"
+                "3. Do not use generic placeholders."
+            ),
+            expected_output="A structured cold outreach subject line and body text.",
+            agent=sdr_agent,
+            output_json=CustomEmailResult
+        )
+
+        crew = Crew(agents=[sdr_agent], tasks=[email_task])
+        result = crew.kickoff()
+        return result.json_dict if hasattr(result, 'json_dict') else json.loads(result.raw)
+
+
+    async def compile_proposal_data(self, user_prompt: str, icp_context: str) -> tuple[str, dict]:
+        """Drafts a beautifully written, structured business proposal context object."""
+        strategist_agent = Agent(
+            role="Enterprise B2B Sales Strategist",
+            goal="Formulate high-value corporate growth and sales proposals.",
+            backstory="You are an expert sales executive specializing in deep technical problem-solving and corporate structuring. The current year is 2026.",
+            verbose=False,
+            allow_delegation=False,
+            llm=self.llm
+        )
+
+        proposal_task = Task(
+            description=(
+                f"Take the user's prompt request and draft a highly persuasive, detailed business proposal.\n"
+                f"User request: '{user_prompt}'\n\n"
+                f"Our Company Profile context:\n{icp_context}"
+            ),
+            expected_output="An executive-level structured business proposal structure containing strategy and commercial targets.",
+            agent=strategist_agent,
+            output_json=ProposalDataResult
+        )
+
+        crew = Crew(agents=[strategist_agent], tasks=[proposal_task])
+        result = crew.kickoff()
         
+        parsed_data = result.json_dict if hasattr(result, 'json_dict') else json.loads(result.raw)
+        title = parsed_data.pop("document_title", "Business_Proposal")
+        return title, parsed_data
+
+
+    async def extract_action(self, message: str, icp: str) -> ActionExtractionResult:
+        """Classifies client intent and parses necessary routing parameters from natural language."""
+        routing_agent = Agent(
+            role="B2B Sales Operations Router",
+            goal="Analyze inbound messages, classify specific user actions, and extract operational parameters.",
+            backstory="You are an efficient digital coordinator. Your absolute goal is mapping client intent to explicit parameters. The current year is 2026.",
+            verbose=False,
+            allow_delegation=False,
+            llm=self.llm
+        )
+
+        routing_task = Task(
+            description=(
+                f"Extract routing action and parameters from this user message:\n"
+                f"'{message}'\n\n"
+                f"Current Company ICP Context:\n{icp}\n\n"
+                "Intent Guidelines:\n"
+                "- UPDATE_ICP: Explicit intent to change / modify corporate targeting profile.\n"
+                "- GET_LEADS: Broad search/lookup requests.\n"
+                "- ANALYZE_LEAD: Deep dive/qualification on a specific person or brand.\n"
+                "- DRAFT_EMAIL: Composing cold outbound strategies.\n"
+                "- CREATE_MEETING: Booking/scheduling. Extract target person to 'keywords' and parse ISO timestamp details to 'start_time'.\n"
+                "- CANCEL_MEETING: Dropping/deleting slots.\n"
+                "- GENERATE_PROPOSAL: Compiling business proposals for targets."
+            ),
+            expected_output="A structured routing schema containing action parameters.",
+            agent=routing_agent,
+            output_json=ActionExtractionResult
+        )
+
+        crew = Crew(agents=[routing_agent], tasks=[routing_task])
+        result = crew.kickoff()
+        return result.json_dict if hasattr(result, 'json_dict') else json.loads(result.raw)
 
     # =====================================================
-    # AI CUSTOM EMAIL GENERATOR
-    # =====================================================
-    async def _generate_custom_email(self, lead_info: dict, icp: str) -> dict:
-        """Generates a highly customized outreach email draft based on lead data and ICP."""
-        prompt = f"""You are an elite B2B sales development representative. Write a highly tailored, personalized cold outreach email to the target lead below based on our company's Ideal Customer Profile (ICP).
-
-                Company ICP Context:
-                \"\"\"
-                {icp}
-                \"\"\"
-
-                Target Lead Data:
-                \"\"\"
-                {json.dumps(lead_info, indent=2)}
-                \"\"\"
-
-                Guidelines:
-                1. Make it professional, relevant, and short (under 150 words).
-                2. Directly hook their specific role, company, or background data.
-                3. Do not use generic placeholders.
-
-                Return ONLY a valid JSON object matching this schema:
-                {{
-                    "subject": "Compelling, short email subject line",
-                    "body": "The personalized body text of the email."
-                }}
-                """
-        payload = {
-            "model": self.MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,  # slightly higher for creative writing variance
-            "max_tokens": 500,
-            "response_format": {"type": "json_object"}
-        }
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.grok_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"].strip()
-            cleaned = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.IGNORECASE)
-            return json.loads(cleaned)
-        
-
-    async def _compile_proposal_data(self, user_prompt: str, icp_context: str) -> tuple[str, dict]:
-        """
-        Processes a raw generation prompt and constructs a beautifully written,
-        structured business proposal JSON context object.
-        """
-        system_prompt = f"""You are an elite enterprise B2B sales strategist. 
-        Take the user's prompt request and draft a highly persuasive, detailed business proposal.
-        Assume the current context year is 2026.
-
-        Our Company Context / Profile:
-        \"\"\"
-        {icp_context}
-        \"\"\"
-
-        Return ONLY a valid JSON object matching this exact schema layout structure:
-        {{
-            "document_title": "A short clean file-safe title (e.g., SalesSync_Acme_Growth_Proposal)",
-            "executive_summary": "Deep, highly persuasive 1-2 paragraph executive hook highlighting key business drivers.",
-            "problem_statement": "A technical breakdown of client operational pain points and functional bottlenecks.",
-            "proposed_solution": "A detailed step-by-step resolution strategy highlighting technical architecture and deliverables.",
-            "investment_and_pricing": "Clear commercial pricing packages, implementation tier estimates, or milestone billing timelines."
-        }}
-        """
-        
-        payload = {
-            "model": self.MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.5,
-            "max_tokens": 2000,
-            "response_format": {"type": "json_object"}
-        }
-
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.grok_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            content = data["choices"][0]["message"]["content"].strip()
-            
-            cleaned = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.IGNORECASE)
-            parsed_proposal = json.loads(cleaned)
-            title = parsed_proposal.pop("document_title", "Business_Proposal")
-            return title, parsed_proposal
-
-    # =====================================================
-    # NEW: DOCX DOCUMENT BUILDER FROM SCRATCH
+    # STANDARD UTILITY METHODS (Unchanged database/IO operations)
     # =====================================================
     def create_proposal_document(self, proposal_title: str, proposal_data: dict) -> io.BytesIO:
-        """Generates a professional corporate Word file using code structures from LLM blocks."""
+        """Generates a professional corporate Word file using document builder structures."""
         doc = Document()
-
-        # Set 1-inch uniform page borders
         for section in doc.sections:
             section.top_margin = Inches(1)
             section.bottom_margin = Inches(1)
             section.left_margin = Inches(1)
             section.right_margin = Inches(1)
 
-        # Baseline Font Definitions
         style_normal = doc.styles['Normal']
         style_normal.font.name = 'Arial'
         style_normal.font.size = Pt(11)
         style_normal.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
 
-        # Document Header Layout Block
         title_p = doc.add_paragraph()
         title_run = title_p.add_run(proposal_title.replace("_", " ").upper())
         title_run.font.size = Pt(24)
@@ -264,7 +261,6 @@ class ChatAgentsService:
         doc.add_paragraph().add_run("_" * 60).font.color.rgb = RGBColor(0xD3, 0xD3, 0xD3)
         doc.add_paragraph() 
 
-        # Content Generation Mapping Loop
         sections_map = {
             "executive_summary": "1. Executive Summary",
             "problem_statement": "2. Problem Statement & Operational Context",
@@ -292,78 +288,6 @@ class ChatAgentsService:
         doc.save(out_stream)
         out_stream.seek(0)
         return out_stream
-
-    # =====================================================
-    # ENHANCED AI PROMPT WITH ANALYZE ACTION ADDED
-    # =====================================================
-    async def extract_action(self, message: str, icp: str) -> dict:
-        prompt = f"""You are a B2B sales AI routing assistant. Your job is to classify the user's intent and extract matching parameters.
-                Assume the current year context is 2026.
-
-                Current Company ICP:
-                \"\"\"
-                {icp}
-                \"\"\"
-
-                You must respond ONLY with a valid JSON object matching this schema:
-                {{
-                    "action": "UPDATE_ICP" | "GET_LEADS" | "ANALYZE_LEAD" | "DRAFT_EMAIL" | "CREATE_MEETING" | "CANCEL_MEETING" | "GENERATE_PROPOSAL" | "NORMAL",
-                    "parameters": {{
-                        "new_icp": "string (only used for UPDATE_ICP)",
-                        "keywords": ["list", "of", "titles/roles/queries/names (used for GET_LEADS, ANALYZE_LEAD, DRAFT_EMAIL, CREATE_MEETING, CANCEL_MEETING)"],
-                        "industry": ["list", "of", "industries (only used for GET_LEADS)"],
-                        "country": ["list", "of", "countries (only used for GET_LEADS)"],
-                        "limit": int (default 20, max 50),
-                        "start_time": "string (ISO 8601 timestamp YYYY-MM-DDTHH:MM:SS, only used for CREATE_MEETING)"
-                    }}
-                }}
-
-                Intent Rules:
-                1. UPDATE_ICP: When the user explicitly wants to update, rewrite, change, or modify their Ideal Customer Profile (ICP).
-                2. GET_LEADS: When the user wants to search, pull, find, or look up prospects broadly.
-                3. ANALYZE_LEAD: When the user explicitly names a specific person or company to analyze or qualify.
-                4. DRAFT_EMAIL: When the user asks to write, draft, generate, or compose an email to a specific person.
-                5. CREATE_MEETING: When the user wants to book, schedule, set up, or arrange a meeting/call with a specific prospect. Extract the target person's name into 'keywords' and parse the requested timestamp into 'start_time' as an ISO format string.
-                6. CANCEL_MEETING: When the user wants to cancel, remove, or drop a scheduled meeting with a specific person. Extract the person's name into 'keywords'.
-                7. NORMAL: For general questions or conversational small talk.
-                8. GENERATE_PROPOSAL: When the user asks to write, generate, create, compile, or build a business proposal document for a specific client target or context company name.
-
-                Examples:
-
-                User: "Schedule a meeting with Dharmesh Shah for tomorrow at 2 PM"
-                Output: {{"action": "CREATE_MEETING", "parameters": {{"keywords": ["Dharmesh Shah"], "start_time": "2026-07-09T14:00:00"}}}}
-
-                User: "Cancel my appointment with Dharmesh"
-                Output: {{"action": "CANCEL_MEETING", "parameters": {{"keywords": ["Dharmesh"]}}}}
-
-                User message:
-                "{message}"
-                """
-
-        payload = {
-            "model": self.MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": 500,
-            "response_format": {"type": "json_object"}
-        }
-
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.grok_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            raw_content = data["choices"][0]["message"]["content"]
-            
-            cleaned_content = re.sub(r"^```json\s*|\s*```$", "", raw_content.strip(), flags=re.IGNORECASE)
-            return json.loads(cleaned_content)
-
 
     async def search_current_leads_by_name(self, team_id: UUID, name_keywords: list, limit: int = 1):
         """Searches the permanent Lead table for a lead matching the team_id and name."""
