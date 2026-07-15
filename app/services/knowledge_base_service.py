@@ -14,6 +14,7 @@ from app.models.team_member import TeamMember
 from app.config import settings
 from app.core.s3 import generate_presigned_url
 from app.core.cache import cache_get, cache_set, cache_delete
+from app.services.knowledge_base_rag_service import KnowledgeBaseRAGService
 
 logger = logging.getLogger(__name__)
 
@@ -133,11 +134,17 @@ class KnowledgeBaseService:
                 file_url=file_url,
                 file_type=file_type,
                 file_size=file_size,
+                source_url=file_url,
+                status="processing",
+                chunk_count=0,
             )
 
             self.db.add(asset)
             await self.db.commit()
             await self.db.refresh(asset)
+
+            rag_service = KnowledgeBaseRAGService(self.db)
+            asset = await rag_service.index_asset(asset, file_content)
 
             logger.info(f"Asset {asset.id} uploaded successfully for team {team.id}")
             cache_delete(f"kb_assets:{team.id}:list")
@@ -147,6 +154,13 @@ class KnowledgeBaseService:
             raise
         except Exception as e:
             logger.error(f"Failed to upload asset: {str(e)}")
+            try:
+                if 'asset' in locals():
+                    asset.status = "failed"
+                    asset.processing_error = str(e)
+                    await self.db.commit()
+            except Exception:
+                logger.warning("Failed to persist KB indexing failure state")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to upload file: {str(e)}",
@@ -174,6 +188,8 @@ class KnowledgeBaseService:
         asset = await self.get_asset(asset_id, user_id)
         team = await self._get_user_team(user_id)
 
+        rag_service = KnowledgeBaseRAGService(self.db)
+
         try:
             s3_key = asset.file_url.split(
                 f"{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/"
@@ -189,6 +205,11 @@ class KnowledgeBaseService:
             )
         except Exception as e:
             logger.warning(f"Failed to delete S3 object: {str(e)}")
+
+        try:
+            await rag_service.delete_asset_index(asset)
+        except Exception as e:
+            logger.warning(f"Failed to delete Pinecone vectors: {str(e)}")
 
         await self.db.delete(asset)
         await self.db.commit()

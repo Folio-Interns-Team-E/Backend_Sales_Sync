@@ -5,9 +5,17 @@ from typing import Optional
 from app.database import get_db
 from app.middleware.auth_middleware import get_current_user
 from app.models.user import User
-from app.schemas.knowledge_base import KnowledgeAssetResponse, KnowledgeAssetUpdate
+from app.schemas.knowledge_base import (
+    KnowledgeAssetResponse,
+    KnowledgeAssetUpdate,
+    KnowledgeBaseAnswerResponse,
+    KnowledgeBaseSearchRequest,
+    KnowledgeBaseSearchResponse,
+    KnowledgeBaseSource,
+)
 from app.schemas.common import ApiResponse
 from app.services.knowledge_base_service import KnowledgeBaseService
+from app.services.knowledge_base_rag_service import KnowledgeBaseRAGService
 
 router = APIRouter(prefix="/knowledge-base", tags=["knowledge-base"])
 
@@ -87,3 +95,42 @@ async def delete_asset(
     service = KnowledgeBaseService(db)
     await service.delete_asset(asset_id, current_user.id)
     return ApiResponse(success=True, message="Asset deleted", data={})
+
+
+@router.post("/search", response_model=ApiResponse[KnowledgeBaseSearchResponse])
+async def search_knowledge_base(
+    payload: KnowledgeBaseSearchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = KnowledgeBaseRAGService(db)
+    team = await service._get_user_team(current_user.id)
+    sources = await service.search(team.id, payload.query, limit=payload.limit)
+    return ApiResponse(
+        success=True,
+        message="Knowledge base search completed successfully",
+        data=KnowledgeBaseSearchResponse(
+            query=payload.query,
+            sources=[KnowledgeBaseSource.model_validate(source) for source in sources],
+        ),
+    )
+
+
+@router.post("/ask", response_model=ApiResponse[KnowledgeBaseAnswerResponse])
+async def ask_knowledge_base(
+    payload: KnowledgeBaseSearchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = KnowledgeBaseRAGService(db)
+    team = await service._get_user_team(current_user.id)
+    answer = await service.answer_query(team.id, payload.query, limit=payload.limit)
+    return ApiResponse(
+        success=True,
+        message="Knowledge base answer generated successfully",
+        data=KnowledgeBaseAnswerResponse(
+            query=payload.query,
+            answer=answer["answer"],
+            sources=[KnowledgeBaseSource.model_validate(source) for source in answer["sources"]],
+        ),
+    )

@@ -3,6 +3,7 @@ import traceback
 from uuid import UUID
 from datetime import datetime
 
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -14,6 +15,7 @@ from app.models.lead import Lead, LeadStatus
 from app.models.meeting import Meeting, MeetingStatus
 from app.services.chat_agents import ChatAgentsService
 from app.services.calcom_service import CalComService
+from app.services.knowledge_base_rag_service import KnowledgeBaseRAGService
 from app.core.cache import cache_get, cache_set, cache_delete
 
 
@@ -403,7 +405,13 @@ class ChatService(ChatAgentsService):
                 )
 
             else:
-                response = "I can help you search for prospects, analyze individuals, or modify your ICP. What would you like to do?"
+                rag_service = KnowledgeBaseRAGService(self.db)
+                kb_answer = await rag_service.answer_query(team.id, message)
+
+                if kb_answer.get("sources"):
+                    response = kb_answer["answer"]
+                else:
+                    response = "I can help you search for prospects, analyze individuals, modify your ICP, or answer questions from your knowledge base. What would you like to do?"
 
             self.db.add(
                 ChatMessage(
