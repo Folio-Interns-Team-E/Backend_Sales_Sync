@@ -570,7 +570,7 @@ APP_ENV=development
 ## 🔗 External Integrations
 
 ### Groq AI (`grok_service.py`)
-- **Model**: llama-3.3-70b-versatile
+- **Model**: openai/gpt-oss-120b
 - **Use Cases**:
   - ICP generation from company descriptions
   - Lead qualification & analysis

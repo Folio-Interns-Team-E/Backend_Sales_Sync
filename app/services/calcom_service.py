@@ -13,6 +13,7 @@ from cryptography.fernet import Fernet
 from app.models.calcom_credentials import CalComIntegration
 from app.schemas.calcom import CalComIntegrationCreate
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,9 @@ class CalComService:
         email: str,
         agenda: list[str] = []
     ):
+        
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=ZoneInfo("Asia/Karachi"))
 
         payload = {
             "start": start_time.isoformat(),
@@ -124,48 +128,34 @@ class CalComService:
         booking_uid: str,
         meeting_id
     ):
-
-
+        # Remove "cancelSubsequentBookings" to allow single meeting cancellations
         payload = {
-            "cancellationReason": "User requested cancellation",
-            "cancelSubsequentBookings": True
+            "cancellationReason": "User requested cancellation"
         }
 
-
         async with httpx.AsyncClient() as client:
-
             response = await client.post(
                 f"{CAL_BASE_URL}/bookings/{booking_uid}/cancel",
                 headers=self.headers,
                 json=payload
             )
 
-
         if response.status_code not in [200, 204]:
-
             logger.error(response.text)
-
             raise Exception(
                 f"Cal cancellation failed: {response.text}"
             )
 
-
-        # Update local meeting
-
+        # Update local meeting status
         result = await self.db.execute(
             select(Meeting)
             .where(Meeting.id == meeting_id)
         )
-
         meeting = result.scalar_one_or_none()
 
-
         if meeting:
-
             meeting.status = MeetingStatus.CANCELLED.value
-
             await self.db.commit()
-
 
         return {
             "status": "cancelled",

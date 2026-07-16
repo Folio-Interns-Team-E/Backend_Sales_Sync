@@ -12,7 +12,6 @@ from app.schemas.teams import (
     TeamResponse, MemberResponse,
     UserTeamResponse, TeamUpdate
 )
-from app.core.cache import cache_get, cache_set, cache_delete, cache_invalidate
 
 
 def _build_team_response(team: Team) -> TeamResponse:
@@ -84,7 +83,6 @@ async def create_team(
 
     team = await _get_team_with_members(new_team.id, db)
     result = _build_team_response(team)
-    cache_delete(f"teams:{current_user.id}:list")
     return result
 
 
@@ -93,11 +91,6 @@ async def get_team(
         current_user: User,
         db: AsyncSession
 ):
-    cache_key_team = f"team:{team_id}:detail"
-    cached = cache_get(cache_key_team)
-    if cached is not None:
-        return TeamResponse(**cached)
-
     membership = await _get_membership(current_user.id, team_id, db)
     if not membership:
         raise HTTPException(
@@ -112,7 +105,6 @@ async def get_team(
             detail="Team not found"
         )
     result = _build_team_response(team)
-    cache_set(cache_key_team, result.model_dump(mode="json"))
     return result
 
 
@@ -153,7 +145,6 @@ async def invite_member(
 
     team = await _get_team_with_members(inviter_membership.team_id, db)
     result = _build_team_response(team)
-    cache_delete(f"team:{inviter_membership.team_id}:detail")
     return result
 
 
@@ -189,7 +180,6 @@ async def join_existing_team(
 
     team = await _get_team_with_members(team.id, db)
     result = _build_team_response(team)
-    cache_delete(f"team:{team.id}:detail")
     return result
 
 
@@ -225,7 +215,6 @@ async def update_member_role(
 
     team = await _get_team_with_members(team_id, db)
     result = _build_team_response(team)
-    cache_delete(f"team:{team_id}:detail")
     return result
 
 
@@ -260,7 +249,6 @@ async def remove_member(
 
     team = await _get_team_with_members(team_id, db)
     result = _build_team_response(team)
-    cache_delete(f"team:{team_id}:detail")
     return result
 
 
@@ -269,11 +257,6 @@ async def get_team_invite_code(
     current_user: User,
     db: AsyncSession
 ):
-    cache_key = f"team:{team_id}:invite_code"
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return cached
-
     membership = await _get_membership(current_user.id, team_id, db)
     if not membership:
         raise HTTPException(
@@ -291,7 +274,6 @@ async def get_team_invite_code(
         )
 
     data = {"invite_code": team.invite_code}
-    cache_set(cache_key, data)
     return data
 
 
@@ -326,7 +308,6 @@ async def update_team(
     if payload.name is not None:
         team.name = payload.name
     await db.commit()
-    cache_delete(f"team:{team_id}:detail")
 
     team = await _get_team_with_members(team_id, db)
     return _build_team_response(team)
@@ -360,16 +341,9 @@ async def delete_team(
 
     await db.delete(team)
     await db.commit()
-    cache_delete(f"team:{team_id}:detail")
-    cache_delete(f"teams:{current_user.id}:list")
 
 
 async def get_user_teams(current_user: User, db: AsyncSession) -> list[UserTeamResponse]:
-    cache_key = f"teams:{current_user.id}:list"
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return [UserTeamResponse(**item) for item in cached]
-
     result = await db.execute(
         select(TeamMember)
         .options(selectinload(TeamMember.team))
@@ -387,5 +361,4 @@ async def get_user_teams(current_user: User, db: AsyncSession) -> list[UserTeamR
         )
         for tm in memberships
     ]
-    cache_set(cache_key, [t.model_dump(mode="json") for t in teams])
     return teams

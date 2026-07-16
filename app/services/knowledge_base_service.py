@@ -13,7 +13,6 @@ from app.models.team import Team
 from app.models.team_member import TeamMember
 from app.config import settings
 from app.core.s3 import generate_presigned_url
-from app.core.cache import cache_get, cache_set, cache_delete
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +56,6 @@ class KnowledgeBaseService:
 
     async def list_assets(self, user_id: UUID):
         team = await self._get_user_team(user_id)
-        cache_key = f"kb_assets:{team.id}:list"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            for a in cached:
-                if a.get("file_url") and "amazonaws.com" in a["file_url"]:
-                    a["presigned_url"] = generate_presigned_url(a["file_url"])
-            return cached
 
         query = (
             select(KnowledgeAsset)
@@ -74,7 +66,6 @@ class KnowledgeBaseService:
         assets = result.scalars().all()
         from app.schemas.knowledge_base import KnowledgeAssetResponse
         data = [KnowledgeAssetResponse.model_validate(a).model_dump(mode="json") for a in assets]
-        cache_set(cache_key, data, ttl=60)
         return data
 
     async def get_asset(self, asset_id: UUID, user_id: UUID):
@@ -140,7 +131,6 @@ class KnowledgeBaseService:
             await self.db.refresh(asset)
 
             logger.info(f"Asset {asset.id} uploaded successfully for team {team.id}")
-            cache_delete(f"kb_assets:{team.id}:list")
             return asset
 
         except HTTPException:
@@ -167,7 +157,6 @@ class KnowledgeBaseService:
         await self.db.refresh(asset)
         self._attach_presigned(asset)
         team = await self._get_user_team(user_id)
-        cache_delete(f"kb_assets:{team.id}:list")
         return asset
 
     async def delete_asset(self, asset_id: UUID, user_id: UUID):
@@ -192,4 +181,3 @@ class KnowledgeBaseService:
 
         await self.db.delete(asset)
         await self.db.commit()
-        cache_delete(f"kb_assets:{team.id}:list")

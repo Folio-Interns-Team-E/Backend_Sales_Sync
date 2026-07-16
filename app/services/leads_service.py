@@ -7,7 +7,6 @@ from fastapi import HTTPException, status
 from app.models.lead import Lead, LeadStatus
 from app.models.team import Team
 from app.models.team_member import TeamMember
-from app.core.cache import cache_get, cache_set, cache_delete
 from app.schemas.leads import LeadListResponse
 
 logger = logging.getLogger(__name__)
@@ -30,11 +29,6 @@ class LeadService:
 
     async def list_leads(self, user_id: UUID, status_filter: Optional[str] = None):
         team = await self._get_user_team(user_id)
-        status_key = status_filter or "all"
-        cache_key = f"leads:{team.id}:list:{status_key}"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return cached
 
         query = select(Lead).where(Lead.team_id == team.id)
         if status_filter:
@@ -43,7 +37,6 @@ class LeadService:
         result = await self.db.execute(query)
         leads = result.scalars().all()
         data = [LeadListResponse.model_validate(lead).model_dump(mode="json") for lead in leads]
-        cache_set(cache_key, data)
         return data
 
     async def get_lead(self, lead_id: UUID, user_id: UUID):
@@ -71,7 +64,6 @@ class LeadService:
         self.db.add(lead)
         await self.db.commit()
         await self.db.refresh(lead)
-        cache_delete(f"leads:{team.id}:list:all")
         return lead
 
     async def update_lead_status(self, lead_id: UUID, user_id: UUID,
@@ -85,7 +77,6 @@ class LeadService:
             lead.ai_context_data = {**(lead.ai_context_data or {}), "reasoning": reasoning}
         await self.db.commit()
         await self.db.refresh(lead)
-        cache_delete(f"leads:{lead.team_id}:list:all")
         return lead
 
     async def discard_lead(self, lead_id: UUID, user_id: UUID):
@@ -113,11 +104,9 @@ class LeadService:
             lead.source = source
         await self.db.commit()
         await self.db.refresh(lead)
-        cache_delete(f"leads:{lead.team_id}:list:all")
         return lead
 
     async def delete_lead(self, lead_id: UUID, user_id: UUID):
         lead = await self.get_lead(lead_id, user_id)
         await self.db.delete(lead)
         await self.db.commit()
-        cache_delete(f"leads:{lead.team_id}:list:all")

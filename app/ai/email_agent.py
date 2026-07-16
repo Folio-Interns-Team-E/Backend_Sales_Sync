@@ -1,71 +1,39 @@
+# app/ai/email_agent.py
+
 import json
 import re
 import logging
-from uuid import UUID
-
 import httpx
-
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
-from sqlalchemy import String
-
 from app.config import settings
-from app.models.leads_pool import LeadPool
-from app.models.lead import Lead
-import io
-from docx import Document
-from docx.shared import Inches, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-
 
 logger = logging.getLogger(__name__)
 
 
-class ChatAgentsService:
+class EmailAgent:
+    """
+    Dedicated agent responsible for generating highly customized sales outreach emails
+    and critical, strict self-evaluations against the company ICP and strict parameters.
+    """
 
     BASE_URL = "https://api.groq.com/openai/v1"
-    MODEL = "openai/gpt-oss-120b"
+    MODEL = "llama-3.3-70b-versatile"
 
-    def __init__(self, db: AsyncSession):
-        self.db = db
-
-    # =====================================================
-    # LEAD SEARCH FUNCTION (Kept exactly as original)
-    # =====================================================
-
-    async def search_leads(self, filters: dict, limit: int = 20):
-        conditions = []
-
-        keywords = filters.get("keywords", [])
-        industries = filters.get("industry", [])
-        countries = filters.get("country", [])
-
-        # Search titles + keywords + company
-        for word in keywords:
-            conditions.append(LeadPool.title.ilike(f"%{word}%"))
-            conditions.append(LeadPool.company_name.ilike(f"%{word}%"))
-            conditions.append(LeadPool.raw_data.cast(String).ilike(f"%{word}%"))
-
-        if industries:
-            for industry in industries:
-                conditions.append(LeadPool.industry.ilike(f"%{industry}%"))
-
-        if countries:
-            for country in countries:
-                conditions.append(LeadPool.country.ilike(f"%{country}%"))
-
-        query = select(LeadPool).where(or_(*conditions)).limit(limit)
-
-        result = await self.db.execute(query)
-        leads = result.scalars().all()
-
-        return leads
+    def _extract_json(self, text: str) -> dict:
+        """
+        Helper method to extract and parse the first valid JSON object from raw LLM output,
+        bypassing conversational prefixes, markdown wrappers, or trailing text.
+        """
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
         
+        cleaned = re.sub(r"^```json\s*|\s*```$", "", text, flags=re.IGNORECASE).strip()
+        return json.loads(cleaned)
 
-    # =====================================================
-    # AI CUSTOM EMAIL GENERATOR
-    # =====================================================
-    async def _generate_custom_email(
+    async def generate_custom_email(
         self,
         lead_info: dict,
         icp: str,
@@ -75,8 +43,7 @@ class ChatAgentsService:
         """Generates a highly customized outreach email draft based on lead data and ICP.
 
         If revision_feedback is provided, the prompt asks the model to rewrite the
-        email addressing that feedback specifically (used for the single allowed
-        revision pass after evaluation).
+        email addressing that feedback specifically.
         """
         revision_block = ""
         if revision_feedback:
@@ -118,25 +85,23 @@ class ChatAgentsService:
                 "body": "Saw your recent update on upgrading Acme's real-time data ingestion pipelines, Sarah.\\n\\nWe help high-growth platforms scale their event streaming without the typical database bottleneck or latency spikes.\\n\\nAre you open to exploring if this could optimize your processing speeds next week?"
             }}
 
-            Return ONLY a valid JSON object matching this schema:
+            You must return a valid json object matching this exact schema:
             {{
                 "subject": "Short, pattern-interrupting subject line (under 5 words, no clickbait)",
                 "body": "The personalized body text of the email containing exactly 3 distinct paragraphs separated by \\n\\n."
             }}
-
-            
             """
-            
+
         payload = {
-                "model": self.MODEL,
-                "messages": [{"role": "system", "content": prompt}, {
-                    "role": "user", 
-                    "content": message
-                }],
-                "temperature": 0.3,  # Lowered to ensure precision and prevent sales-y rambling
-                "max_tokens": 350,
-                "response_format": {"type": "json_object"}
-            }
+            "model": self.MODEL,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": message or "Generate the email draft json object."} # Explicitly requesting "json" prevents API 400 errors
+            ],
+            "temperature": 0.3,
+            "max_tokens": 350,
+            "response_format": {"type": "json_object"}
+        }
 
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
@@ -150,10 +115,10 @@ class ChatAgentsService:
             response.raise_for_status()
             data = response.json()
             content = data["choices"][0]["message"]["content"].strip()
-            #cleaned = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.IGNORECASE)
-            return json.loads(content)
+            
+            return self._extract_json(content)
 
-    async def _evaluate_email(self, email_content: dict, lead_info: dict, icp: str, message) -> dict:
+    async def evaluate_email(self, email_content: dict, lead_info: dict, icp: str, message: str) -> dict:
         """Evaluation agent: reviews a drafted email against the ICP and the copywriter's
         own formatting/content rules, and decides whether it needs a revision.
 
@@ -197,7 +162,7 @@ class ChatAgentsService:
             6. Paragraph 3 is a single low-commitment, open-ended question.
             7. Subject line is under 5 words and not clickbait-y.
 
-            Return ONLY a valid JSON object matching this schema:
+            You must return a valid json object matching this exact schema:
             {{
                 "approved": true or false,
                 "feedback": "If not approved, a short, specific, actionable list of what to fix. Empty string if approved."
@@ -206,10 +171,10 @@ class ChatAgentsService:
 
         payload = {
             "model": self.MODEL,
-            "messages": [{"role": "system", "content": prompt}, {
-                    "role": "user", 
-                    "content": message
-                }],
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": message or "Evaluate the email draft and return a json evaluation."} # Explicitly requesting "json" prevents API 400 errors
+            ],
             "temperature": 0.0,
             "max_tokens": 250,
             "response_format": {"type": "json_object"}
@@ -228,31 +193,12 @@ class ChatAgentsService:
                 response.raise_for_status()
                 data = response.json()
                 content = data["choices"][0]["message"]["content"].strip()
-                #cleaned = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.IGNORECASE)
-                result = json.loads(content)
+                
+                result = self._extract_json(content)
                 return {
                     "approved": bool(result.get("approved", True)),
                     "feedback": result.get("feedback", "")
                 }
-        except (httpx.HTTPError, KeyError, json.JSONDecodeError):
-            # Fail open: don't let a broken evaluator block drafting.
+        except (httpx.HTTPError, KeyError, json.JSONDecodeError) as e:
+            logger.error(f"Email evaluation failed, failing open: {e}", exc_info=True)
             return {"approved": True, "feedback": ""}
-        
-
-    async def search_current_leads_by_name(self, team_id: UUID, name_keywords: list, limit: int = 1):
-        """Searches the permanent Lead table for a lead matching the team_id and name."""
-        if not name_keywords:
-            return []
-            
-        conditions = []
-        for keyword in name_keywords:
-            conditions.append(Lead.name.ilike(f"%{keyword}%"))
-            
-        query = (
-            select(Lead)
-            .where(Lead.team_id == team_id, or_(*conditions))
-            .limit(limit)
-        )
-        
-        result = await self.db.execute(query)
-        return result.scalars().all()

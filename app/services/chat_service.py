@@ -2,20 +2,29 @@ import logging
 import traceback
 from uuid import UUID
 from datetime import datetime
-
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-
+import uuid
 from app.models.team import Team
 from app.models.team_member import TeamMember
 from app.models.chat import ChatMessage, ChatRole
+from app.models.proposal import Proposal, ProposalTemplate
 from sqlalchemy import desc
 from app.models.lead import Lead, LeadStatus
 from app.models.meeting import Meeting, MeetingStatus
 from app.services.chat_agents import ChatAgentsService
 from app.services.calcom_service import CalComService
-from app.core.cache import cache_get, cache_set, cache_delete
-
+from app.ai.meeting_agent import MeetingAgent
+from app.ai.proposal_evaluator import ProposalEvaluatorAgent
+from app.ai.lead_analyzer import LeadAnalyzerAgent
+from sqlalchemy.exc import IntegrityError
+import asyncio
+from app.ai.supervisor_agent import SupervisorAgent
+from app.config import settings
+from app.models.user import User
+from app.ai.icp_agent import ICPAgent
+from app.ai.email_agent import EmailAgent
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +64,6 @@ class ChatService(ChatAgentsService):
     
     async def list_messages(self, user_id: UUID):
         team = await self._get_user_team(user_id)
-        cache_key = f"chat_messages:{team.id}:list"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return cached
 
         result = await self.db.execute(
             select(ChatMessage)
@@ -68,7 +73,6 @@ class ChatService(ChatAgentsService):
         messages = result.scalars().all()
         from app.schemas.chat import ChatMessageResponse
         data = [ChatMessageResponse.model_validate(m).model_dump(mode="json") for m in messages]
-        cache_set(cache_key, data, ttl=60)
         return data
 
     async def get_message(self, message_id: UUID, user_id: UUID):
@@ -96,7 +100,6 @@ class ChatService(ChatAgentsService):
         await self.db.commit()
         await self.db.refresh(message)
         team = await self._get_user_team(user_id)
-        cache_delete(f"chat_messages:{team.id}:list")
         return message
 
     async def delete_message(self, message_id: UUID, user_id: UUID):
@@ -104,7 +107,6 @@ class ChatService(ChatAgentsService):
         team = await self._get_user_team(user_id)
         await self.db.delete(message)
         await self.db.commit()
-        cache_delete(f"chat_messages:{team.id}:list")
 
     # =====================================================
     # MAIN CHAT ROUTER
@@ -114,17 +116,47 @@ class ChatService(ChatAgentsService):
             team = await self._get_user_team(user_id)
             icp = await self._get_icp_context(user_id)
 
-            self.db.add(
-                ChatMessage(
-                    team_id=team.id,
-                    user_id=user_id,
-                    sent_by=ChatRole.USER.value,
-                    content=message,
-                    metadata_log={},
-                )
-            )
+            supervisor = SupervisorAgent(self.db)
 
-            ai_response = await self.extract_action(message, icp)
+            # 1. Fetch User Info
+            user_res = await self.db.execute(select(User).where(User.id == user_id))
+            user_obj = user_res.scalar_one_or_none()
+            user_info = {
+                "full_name": user_obj.full_name if user_obj else "Unknown",
+                "email": user_obj.email if user_obj else "Unknown"
+            }
+
+            # 2. Fetch the Last 5 Chat Messages for Context (Prior to storing new incoming)
+            history_res = await self.db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.team_id == team.id)
+                .order_by(desc(ChatMessage.created_at))
+                .limit(5)
+            )
+            db_history = history_res.scalars().all()
+            
+            messages_history = [
+                {
+                    "sent_by": msg.sent_by,
+                    "content": msg.content,
+                    "timestamp": msg.created_at.isoformat() if msg.created_at else None
+                }
+                for msg in reversed(db_history)
+            ]
+
+            # 3. Save the Incoming User Message
+            new_chat_msg = ChatMessage(
+                team_id=team.id,
+                user_id=user_id,
+                sent_by=ChatRole.USER.value,
+                content=message,
+                metadata_log={},
+            )
+            self.db.add(new_chat_msg)
+            await self.db.commit()
+
+            # 4. Use the new router extracted into SupervisorAgent
+            ai_response = await supervisor.extract_action(message, icp)
             action = ai_response.get("action", "NORMAL")
             params = ai_response.get("parameters", {})
 
@@ -133,13 +165,27 @@ class ChatService(ChatAgentsService):
             print("==================AI ACTION==================")
 
             if action == "UPDATE_ICP":
-                new_icp = params.get("new_icp", "").strip()
-                if new_icp:
-                    await self.update_icp(user_id, new_icp)
-                    response = "ICP updated successfully."
-                else:
-                    response = "I couldn't identify the new ICP text to update."
+                
+                    
+                    # 1. Instantiate the new ICP Agent
+                icp_agent = ICPAgent()
+                    
+                    # 2. Refine the raw user input into a professional GTM profile
+                refined_icp = await icp_agent.refine_icp(message)
+                    
+                    # 3. Update the database record with the highly structured ICP
+                await self.update_icp(user_id, refined_icp)
 
+                print("===================NEW ICP===================\n\n")
+                print(refined_icp)
+                print("======================================\n\n")
+                    
+                response = (
+                        "### Profile Refined & Updated Successfully\n\n"
+                        f"{refined_icp}\n\n"
+                        "*This target framework is now set as your active system ICP.*"
+                    )
+          
             elif action == "GET_LEADS":
                 limit = params.get("limit", 20)
                 pool_leads = await self.search_leads(params, limit=limit)
@@ -173,49 +219,114 @@ class ChatService(ChatAgentsService):
             # ACTION SUBROUTINE: ANALYZE_LEAD
             # =====================================================
             elif action == "ANALYZE_LEAD":
-                # Search directly in current team leads by name keywords
+             
+                # 1. Gather configuration and parameters
                 name_keywords = params.get("keywords", [])
-                current_leads = await self.search_current_leads_by_name(team.id, name_keywords, limit=1)
+                limit = min(params.get("limit", 10), 10)  # Allow up to 10 leads concurrently
+                
+                # 2. Search for the requested leads
+                current_leads = await self.search_current_leads_by_name(team.id, name_keywords, limit=limit)
                 
                 if not current_leads:
-                    target_name = name_keywords[0] if name_keywords else "the requested prospect"
-                    response = f"Could not find any lead named '{target_name}' in your current workspace pipeline to analyze."
+                    target_name = name_keywords[0] if name_keywords else "the requested prospects"
+                    response = f"Could not find any leads matching '{target_name}' in your current workspace pipeline to analyze."
+                
                 else:
-                    existing_lead = current_leads[0]
-                    
-                    # Package existing lead metrics for comparison call
-                    profile_payload = {
-                        "name": existing_lead.name,
-                        "title": existing_lead.job_title,
-                        "company": existing_lead.company_name,
-                        "email": existing_lead.email,
-                        "raw_data": existing_lead.ai_context_data.get("raw_pool_data", {})
-                    }
-                    
-                    # Generate metrics via LLM
-                    analysis = await self._generate_fit_score(profile_payload, icp)
-                    fit_score = analysis.get("score", 0)
-                    justification = analysis.get("justification", "No evaluation details provided.")
-                    
-                    # Update the existing permanent Lead record directly
-                    existing_lead.status = LeadStatus.ANALYZED.value
-                    existing_lead.score = fit_score
-                    
-                    # Update JSONB context tracking without wiping out prior fields
-                    updated_context = dict(existing_lead.ai_context_data) if existing_lead.ai_context_data else {}
-                    updated_context["evaluation_justification"] = justification
-                    existing_lead.ai_context_data = updated_context
-                    
-                    # Flag instance dirty for explicit session tracking update
-                    self.db.add(existing_lead)
-                    
-                    response = (
-                        f"### Analysis Complete for {existing_lead.name}\n"
-                        f"**Status Updated To:** {LeadStatus.ANALYZED.value}\n"
-                        f"**ICP Fit Score:** `{fit_score}/100`\n\n"
-                        f"**Justification:**\n{justification}\n\n"
-                        f"*Lead records successfully qualified and updated in your workspace.*"
+                    # Instantiate our isolated Agent
+                    analyzer_agent = LeadAnalyzerAgent(
+                        model=self.MODEL,
+                        base_url=self.BASE_URL,
+                        api_key=settings.grok_api_key
                     )
+                    
+                    # Concurrency Gate: Limit only the LLM API calls to 2 parallel worker agents
+                    semaphore = asyncio.Semaphore(2)
+                    
+                    async def analyze_lead_task(lead) -> dict:
+                        """
+                        Runs only the external API call concurrently. 
+                        Does NOT touch the DB session inside the parallel task.
+                        """
+                        async with semaphore:
+                            raw_context = lead.ai_context_data if lead.ai_context_data else {}
+                            profile_payload = {
+                                "name": lead.name,
+                                "title": lead.job_title,
+                                "company": lead.company_name,
+                                "email": lead.email,
+                                "raw_data": raw_context.get("raw_pool_data", {})
+                            }
+                            
+                            try:
+                                # Execute the external LLM profiling agent
+                                analysis = await analyzer_agent.analyze_fit(profile_payload, icp)
+                                return {
+                                    "lead_id": lead.id,
+                                    "success": True,
+                                    "score": analysis.get("score", 0),
+                                    "justification": analysis.get("justification", "No evaluation details provided.")
+                                }
+                            except Exception as e:
+                                logger.error(f"Error analyzing lead {lead.name}: {str(e)}")
+                                return {
+                                    "lead_id": lead.id,
+                                    "success": False,
+                                    "error": str(e)
+                                }
+
+                    # Step 1: Fire off the parallel LLM API workers (Capped at 2)
+                    tasks = [analyze_lead_task(lead) for lead in current_leads]
+                    analysis_results = await asyncio.gather(*tasks)
+                    
+                    # Map analysis results by lead ID for fast lookup
+                    results_by_id = {res["lead_id"]: res for res in analysis_results}
+                    
+                    # Step 2: Update the DB models sequentially on the main thread session
+                    summary_lines = []
+                    summary_lines.append(f"Successfully processed {len(current_leads)} leads using parallel workers.\n")
+                    
+                    try:
+                        for idx, lead in enumerate(current_leads, start=1):
+                            res = results_by_id.get(lead.id)
+                            
+                            if res and res["success"]:
+                                # Modify properties on the lead object safely
+                                lead.status = LeadStatus.ANALYZED.value
+                                lead.score = res["score"]
+                                
+                                raw_context = lead.ai_context_data if lead.ai_context_data else {}
+                                updated_context = dict(raw_context)
+                                updated_context["evaluation_justification"] = res["justification"]
+                                lead.ai_context_data = updated_context
+                                
+                                # Track changes in session
+                                self.db.add(lead)
+                                
+                                summary_lines.append(
+                                    f"{idx}. {lead.name}\n"
+                                    f"Status: `{LeadStatus.ANALYZED.value}`\n"
+                                    f"ICP Fit Score: `{res['score']}/100`\n"
+                                    f"Justification: {res['justification']}\n"
+                                )
+                            else:
+                                error_msg = res["error"] if res else "Unknown analysis failure."
+                                summary_lines.append(
+                                    f"{idx}. {lead.name}\n"
+                                    f"Status: `FAILED`\n"
+                                    f"Error: {error_msg}\n"
+                                )
+                        
+                        # Step 3: Explicitly commit the transaction to persist updates
+                        await self.db.commit()
+                        
+                    except Exception as db_err:
+                        # Rollback transaction if database save fails
+                        await self.db.rollback()
+                        logger.error(f"Database update failed, rolling back: {str(db_err)}")
+                        summary_lines = [f"An error occurred while saving analysis details to the database: `{str(db_err)}`"]
+
+                    summary_lines.append("\n*Lead records successfully qualified and updated in your workspace.*")
+                    response = "\n".join(summary_lines)
 
             elif action == "DRAFT_EMAIL":
                 from app.services.emails_service import EmailService
@@ -238,12 +349,28 @@ class ChatService(ChatAgentsService):
                         "raw_data": existing_lead.ai_context_data.get("raw_pool_data", {})
                     }
                     
+                    # Instantiate the isolated EmailAgent
+                    email_agent = EmailAgent()
+
                     # 1. Generate customized email text
-                    email_content = await self._generate_custom_email(profile_payload, icp)
+                    email_content = await email_agent.generate_custom_email(profile_payload, icp, message)
+
+                    # 2. Evaluate the output using the self-review model
+                    evaluation = await email_agent.evaluate_email(email_content, profile_payload, icp, message)
+
+                    # 3. Revision pass if rejection triggers
+                    if not evaluation.get("approved", True):
+                        email_content = await email_agent.generate_custom_email(
+                            profile_payload,
+                            icp,
+                            message,
+                            revision_feedback=evaluation.get("feedback", "")
+                        )
+
                     subject = email_content.get("subject", "Quick Question")
                     body = email_content.get("body", "")
                     
-                    # 2. Store the draft using your existing EmailService
+                    # 4. Store the draft using your existing EmailService
                     email_service = EmailService(self.db)
                     drafted_record = await email_service.draft_email(
                         user_id=user_id,
@@ -253,89 +380,26 @@ class ChatService(ChatAgentsService):
                     )
                     
                     response = (
-                        f"### 📝 Draft Created for {existing_lead.name}\n"
+                        f"Draft Created for {existing_lead.name}\n"
                         f"I have successfully generated a personalized outreach template and saved it as a draft in your pipeline system.\n\n"
-                        f"**Subject:** {subject}\n"
-                        f"--- \n"
-                        f"{body}\n"
                     )
 
-            elif action == "CREATE_MEETING":
-                name_keywords = params.get("keywords", [])
-                start_time_str = params.get("start_time")
+            elif action == "MEETING_OPERATION":
+                meeting_agent = MeetingAgent(db_session=self.db)
+    
+                response = await meeting_agent.run(
+                    user_prompt=message, 
+                    team_id=team.id
+                )
                 
-                current_leads = await self.search_current_leads_by_name(team.id, name_keywords, limit=1)
-                
-                if not current_leads:
-                    target_name = name_keywords[0] if name_keywords else "the requested prospect"
-                    response = f"Could not find any lead named '{target_name}' in your workspace to schedule a meeting with."
-                elif not start_time_str:
-                    response = "I recognized you wanted to book a meeting, but I couldn't isolate a clean time or date context. Could you please specify a time?"
-                else:
-                    existing_lead = current_leads[0]
-                    start_time_dt = datetime.fromisoformat(start_time_str)
-                    
-                    cal_service = CalComService(self.db)
-                    booking_info = await cal_service.create_booking(
-                        lead_id=existing_lead.id,
-                        start_time=start_time_dt,
-                        name=existing_lead.name,
-                        email=existing_lead.email,
-                        agenda=", ".join([f"AI Agent Automated Demo Routing with {existing_lead.company_name}"])
-                    )
-                    
-                    response = (
-                        f"### 📅 Meeting Scheduled Successfully!\n"
-                        f"**Attendee:** {existing_lead.name} ({existing_lead.email})\n"
-                        f"**Time:** {start_time_dt.strftime('%Y-%m-%d %I:%M %p')} (Asia/Karachi)\n"
-                        f"**Cal.com Booking UID:** `{booking_info['cal_booking_uid']}`\n\n"
-                        f"*The event has been securely updated in Cal.com and synced locally to your pipeline tracker.*"
-                    )
 
-            # =====================================================
-            # ACTION SUBROUTINE: CANCEL_MEETING
-            # =====================================================
-            elif action == "CANCEL_MEETING":
-                name_keywords = params.get("keywords", [])
-                current_leads = await self.search_current_leads_by_name(team.id, name_keywords, limit=1)
-                
-                if not current_leads:
-                    target_name = name_keywords[0] if name_keywords else "the requested prospect"
-                    response = f"Could not find any lead named '{target_name}' in your current pipeline records."
-                else:
-                    existing_lead = current_leads[0]
-                    
-                    # Fetch active scheduled local meeting records for this lead
-                    meeting_query = (
-                        select(Meeting)
-                        .where(
-                            Meeting.lead_id == existing_lead.id,
-                            Meeting.status == MeetingStatus.SCHEDULED.value
-                        )
-                        .limit(1)
-                    )
-                    meeting_res = await self.db.execute(meeting_query)
-                    active_meeting = meeting_res.scalar_one_or_none()
-                    
-                    if not active_meeting:
-                        response = f"No active scheduled appointments found in your workspace tracking database for {existing_lead.name}."
-                    else:
-                        cal_service = CalComService(self.db)
-                        await cal_service.cancel_booking(
-                            booking_uid=active_meeting.calendar_event_id,
-                            meeting_id=active_meeting.id
-                        )
-                        
-                        response = (
-                            f"### ❌ Meeting Canceled Successfully\n"
-                            f"The scheduled meeting record associated with **{existing_lead.name}** "
-                            f"(Event UID: `{active_meeting.calendar_event_id}`) has been withdrawn from Cal.com "
-                            f"and marked as `{MeetingStatus.CANCELLED.value}` locally."
-                        )
 
             elif action == "GENERATE_PROPOSAL":
                 from app.core.s3 import upload_to_s3
                 from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome
+                from app.ai.proposal_agent import ProposalAgent
+                from sqlalchemy.exc import DBAPIError, IntegrityError
+                import traceback
 
                 name_keywords = params.get("keywords", [])
                 lead_id = None
@@ -346,28 +410,86 @@ class ChatService(ChatAgentsService):
                     if current_leads:
                         lead_id = current_leads[0].id
 
-                # 1. Compile textual layout payload maps via Groq
-                title, raw_proposal_json = await self._compile_proposal_data(message, icp)
+                # 1. Initialize dedicated ProposalAgent & compile proposal + binary docx stream
 
-                # 2. Build the structural .docx stream layout block array in memory
-                file_bytes_stream = self.create_proposal_document(title, raw_proposal_json)
+                template_query = (
+                    select(ProposalTemplate)
+                    .where(ProposalTemplate.team_id == team.id)
+                    .order_by(ProposalTemplate.created_at.desc())
+                    .limit(1)
+                )
+                template_res = await self.db.execute(template_query)
+                team_template = template_res.scalar_one_or_none()
+                template_id = team_template.id if team_template else None
 
-                # 3. Upload the file to S3
-                safe_title = title.replace(" ", "_").replace("/", "_")
-                file_name = f"{safe_title}.docx"
+                if template_id:
+                    logger.info(f"Using found team template ID: {template_id}")
+                else:
+                    logger.info("No custom team template found. Falling back to default layout.")
+
+
+                proposal_agent = ProposalAgent(self.db)
+                filename, file_bytes_stream = await proposal_agent.run(
+                    user_prompt=message,
+                    team_id=team.id,
+                    lead_id=lead_id,
+                    template_id=template_id
+                )
+
+                # 2. Upload file stream to S3
                 file_bytes = file_bytes_stream.getvalue()
                 file_url = await upload_to_s3(
                     file_bytes=file_bytes,
-                    filename=file_name,
+                    filename=filename,
                     content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     prefix="proposals",
                     user_id=str(user_id),
                 )
 
-                # 4. Save a Proposal record in the database
+
+
+                # 3. Save a Proposal record in the database
+                await asyncio.sleep(1)
+                _, raw_proposal_json, styles = await proposal_agent._compile_proposal_data(
+                    user_prompt=message, 
+                    icp_context=team.icp if team.icp else "",
+                    has_template=bool(template_id)
+                )
+
+                logger.info("Initializing proposal single-pass evaluation...")
+                evaluator = ProposalEvaluatorAgent(self.db)
+                await asyncio.sleep(1)
+                evaluation_report = await evaluator.evaluate_proposal(
+                    original_prompt=message,
+                    generated_proposal_data=raw_proposal_json,
+                    icp_context=team.icp if team.icp else "Standard Enterprise B2B SaaS and Professional Solutions."
+                )
+
+                print("===================Proposal===================\n\n")
+                print(raw_proposal_json)
+                print("======================================\n\n")
+
+                print("===================Proposal===================\n\n")
+                print(raw_proposal_json)
+                print("======================================\n\n")
+
+                print(f"--- Creating Proposal ---")
+                print(f"Lead ID:     {lead_id}")
+                print(f"File URL:    {file_url}")
+                print(f"File Type:   docx")
+                print(f"File Size:   {len(file_bytes)} bytes")
+                print(f"AI Metadata: {raw_proposal_json}")
+                print(f"Version:     1")
+                print(f"Status:      {ProposalStatus.DRAFT.value}")
+                print(f"Outcome:     {ProposalOutcome.OPEN.value}")
+                print(f"-------------------------")
+
+
                 proposal = Proposal(
+                    id=uuid.uuid4(),
                     lead_id=lead_id,
                     file_url=file_url,
+                    template_id=template_id,
                     file_type="docx",
                     file_size=len(file_bytes),
                     ai_metadata=raw_proposal_json,
@@ -375,49 +497,71 @@ class ChatService(ChatAgentsService):
                     status=ProposalStatus.DRAFT.value,
                     outcome=ProposalOutcome.OPEN.value,
                 )
-                self.db.add(proposal)
-                await self.db.flush()
 
-                logger.info(f"Proposal saved to S3: {file_url}")
+                try:
+                    # 1. Ensure any prior transactions are clean
+                    if not self.db.is_active:
+                        await self.db.rollback()
 
-                # 5. Extract sections to display preview text in the chat
-                exec_summary = raw_proposal_json.get("executive_summary", "")
-                problem_stmt = raw_proposal_json.get("problem_statement", "")
-                solution = raw_proposal_json.get("proposed_solution", "")
-                pricing = raw_proposal_json.get("investment_and_pricing", "")
+                    # 2. Add the proposal record
+                    self.db.add(proposal)
+                    
+                    # 3. Commit the database changes
+                    await self.db.commit() 
+                    
+                    # 4. CRITICAL: Refresh the model to keep its attributes loaded in memory 
+                    # so FastAPI can safely read them for the response serialization
+                    await self.db.refresh(proposal)
+                    
+                    logger.info("--- DATABASE COMMIT & REFRESH SUCCESSFUL ---")
+                    
+                except Exception as db_err:
+                    logger.error("=" * 80)
+                    logger.error("DATABASE INSERTION FAILED!\n")
+                    logger.error(f"Error Type: {type(db_err)}\n\n")
+                    logger.error(f"Detailed Error: {str(db_err)}\n\n")
+                    if hasattr(db_err, "orig"):
+                        logger.error(f"Underlying Driver Error: {db_err.orig}")
+                    logger.error("=" * 80)
+                    await self.db.rollback()
+                    raise db_err
 
+                logger.info(f"Proposal successfully flushed and saved to S3: {file_url}")
+
+                badge = "Passed" if evaluation_report.get("passed") else "Warning (Needs Manual Polish)"
                 response = (
-                    f"### 📄 Generated Proposal: {title.replace('_', ' ')}\n"
-                    f"📎 **S3 URL:** [Open Document]({file_url})\n\n"
-                    f"--- \n\n"
-                    f"#### **1. Executive Summary**\n"
-                    f"{exec_summary}\n\n"
-                    f"#### **2. Problem Statement & Operational Context**\n"
-                    f"{problem_stmt}\n\n"
-                    f"#### **3. Strategic Roadmap & Proposed Solution**\n"
-                    f"{solution}\n\n"
-                    f"#### **4. Commercial Terms & Financial Scope**\n"
-                    f"{pricing}\n\n"
-                    f"--- \n"
-                    f"*Proposal saved to S3 and recorded in your workspace.*"
+                    f"Generated Proposal: {filename.replace('.docx', '').replace('_', ' ')}\n"
+                    f"URL: ({file_url})\n\n"
+                    f"--- Quality Assurance Report ---\n"
+                    f"Quality Grade: {badge} ({evaluation_report.get('overall_score')}/10)\n"
+                    f"Tone Check: {evaluation_report.get('human_authenticity', {}).get('analysis')}\n"
+                    f"Actionable Polish: {evaluation_report.get('feedback_and_corrections')}\n"
                 )
-
             else:
-                response = "I can help you search for prospects, analyze individuals, or modify your ICP. What would you like to do?"
+                response = "No execution steps required. This is a standard user query."
 
+            supervisor = SupervisorAgent(self.db)
+            final_response = await supervisor.run(
+                user_prompt=message,
+                execution_result=response,
+                team_id=team.id,
+                messages_history=messages_history,
+                user_info=user_info
+            )
+            
+            # Save the AI's generated response to the DB to preserve conversational context
             self.db.add(
                 ChatMessage(
                     team_id=team.id,
                     user_id=user_id,
                     sent_by=ChatRole.AI.value,
-                    content=response,
-                    metadata_log={"model": self.MODEL},
+                    content=final_response,
+                    metadata_log={},
                 )
             )
-
             await self.db.commit()
-            cache_delete(f"chat_messages:{team.id}:list")
-            return response
+
+            return final_response
 
         except Exception as e:
             print("\n========== CHAT ERROR ==========")

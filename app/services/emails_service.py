@@ -8,7 +8,6 @@ from app.models.email import Email, EmailStatus
 from app.models.lead import Lead
 from app.models.team import Team
 from app.models.team_member import TeamMember
-from app.core.cache import cache_get, cache_set, cache_delete
 from app.schemas.emails import EmailResponse
 
 logger = logging.getLogger(__name__)
@@ -42,18 +41,12 @@ class EmailService:
         return email
 
     async def list_emails(self, user_id: UUID, lead_id: UUID):
-        cache_key = f"emails:{lead_id}:list"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return cached
-
         team = await self._get_user_team(user_id)
         query = select(Email).where(Email.lead_id == lead_id)
         query = query.order_by(desc(Email.sent_at))
         result = await self.db.execute(query)
         emails = result.scalars().all()
         data = [EmailResponse.model_validate(e).model_dump(mode="json") for e in emails]
-        cache_set(cache_key, data)
         return data
 
     async def create_email(self, user_id: UUID, lead_id: UUID, subject: str,
@@ -78,7 +71,6 @@ class EmailService:
         lead.status = "Sent"
         await self.db.commit()
         await self.db.refresh(email)
-        cache_delete(f"emails:{lead_id}:list")
         return email
 
     async def draft_email(self, user_id: UUID, lead_id: UUID, subject: str, body: str):
@@ -99,7 +91,6 @@ class EmailService:
             lead.status = "Drafted"
         await self.db.commit()
         await self.db.refresh(email)
-        cache_delete(f"emails:{lead_id}:list")
         return email
 
     async def update_email(self, email_id: UUID, user_id: UUID,
@@ -117,7 +108,6 @@ class EmailService:
             email.body = body
         await self.db.commit()
         await self.db.refresh(email)
-        cache_delete(f"emails:{email.lead_id}:list")
         return email
 
     async def delete_email(self, email_id: UUID, user_id: UUID):
@@ -145,4 +135,3 @@ class EmailService:
         lead_id = email.lead_id
         await self.db.delete(email)
         await self.db.commit()
-        cache_delete(f"emails:{lead_id}:list")
