@@ -26,6 +26,7 @@ dependencies = [
     "resend>=2.32.2",
     "cryptography>=49.0.0",
     "python-docx-replace>=0.4.4",
+    "reportlab>=5.0.0",
 ]
 
 [dependency-groups]

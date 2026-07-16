@@ -36,12 +36,35 @@ Provide an objective analysis. Return ONLY a valid JSON object matching this sch
     "justification": "A clear, concise 2-sentence explanation of why they received this score based on the ICP context."
 }}
 """
+        json_schema = {
+            "name": "lead_analysis",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "score": {
+                        "type": "integer",
+                        "description": "An objective alignment score from 0 to 100"
+                    },
+                    "justification": {
+                        "type": "string",
+                        "description": "A clear, concise 2-sentence explanation of why they received this score."
+                    }
+                },
+                "required": ["score", "justification"],
+                "additionalProperties": False
+            }
+        }
+
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": 300,
-            "response_format": {"type": "json_object"}
+            "temperature": 0.6,  # 0.6 is recommended default for GPT-OSS reasoning models
+            "max_completion_tokens": 1024,  # Replaced max_tokens with max_completion_tokens
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": json_schema
+            }
         }
 
         async with httpx.AsyncClient(timeout=30) as client:
