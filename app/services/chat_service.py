@@ -25,6 +25,9 @@ from app.config import settings
 from app.models.user import User
 from app.ai.icp_agent import ICPAgent
 from app.ai.email_agent import EmailAgent
+from app.services.knowledge_base_rag_service import KnowledgeBaseRAGService
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -538,6 +541,14 @@ class ChatService(ChatAgentsService):
                     f"Actionable Polish: {evaluation_report.get('feedback_and_corrections')}\n"
                 )
             else:
+                rag_service = KnowledgeBaseRAGService(self.db)
+                kb_answer = await rag_service.answer_query(team.id, message)
+
+                if kb_answer.get("sources"):
+                    response = kb_answer["answer"]
+                else:
+                    response = "I can help you search for prospects, analyze individuals, modify your ICP, or answer questions from your knowledge base. What would you like to do?"
+
                 response = "No execution steps required. This is a standard user query."
 
             supervisor = SupervisorAgent(self.db)
