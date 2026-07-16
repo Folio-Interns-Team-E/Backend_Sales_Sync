@@ -198,10 +198,30 @@ class ChatService(ChatAgentsService):
                 else:
                     response = f"Found and saved {len(pool_leads)} leads to your workspace:\n\n"
                     for pool_lead in pool_leads:
+                        # 1. Standardize the values first to query against them
+                        name = pool_lead.full_name or f"{pool_lead.first_name or ''} {pool_lead.last_name or ''}".strip() or "Unknown"
+                        email = pool_lead.email or "no-email@provided.com"
+                        team_id = team.id
+
+                        # 2. Check if a lead already exists with (same name AND team_id) OR (same email AND team_id)
+                        # We skip the check if the email is "no-email@provided.com" to avoid blocking multiple leads with missing emails
+                        email_filter = (Lead.email == email) & (Lead.team_id == team_id) if email != "no-email@provided.com" else False
+                        name_filter = (Lead.name == name) & (Lead.team_id == team_id)
+
+                        # Construct an asynchronous select query
+                        stmt = select(Lead).where(name_filter | email_filter)
+                        result = await self.db.execute(stmt)
+                        exists = result.scalar_one_or_none()
+
+                        if exists:
+                            # Skip adding and skip counting in response
+                            continue
+
+                        # 3. Create and add the new lead if no duplicate exists
                         new_lead = Lead(
-                            team_id=team.id,
-                            name=pool_lead.full_name or f"{pool_lead.first_name or ''} {pool_lead.last_name or ''}".strip() or "Unknown",
-                            email=pool_lead.email or "no-email@provided.com",
+                            team_id=team_id,
+                            name=name,
+                            email=email,
                             status=LeadStatus.NEW.value,
                             company_name=pool_lead.company_name,
                             job_title=pool_lead.title,
@@ -549,7 +569,6 @@ class ChatService(ChatAgentsService):
                 else:
                     response = "I can help you search for prospects, analyze individuals, modify your ICP, or answer questions from your knowledge base. What would you like to do?"
 
-                response = "No execution steps required. This is a standard user query."
 
             supervisor = SupervisorAgent(self.db)
             final_response = await supervisor.run(

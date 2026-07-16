@@ -239,15 +239,19 @@ class ChatAgentsService:
             return {"approved": True, "feedback": ""}
         
 
-    async def search_current_leads_by_name(self, team_id: UUID, name_keywords: list, limit: int = 1):
-        """Searches the permanent Lead table for a lead matching the team_id and name."""
-        if not name_keywords:
+    async def search_current_leads_by_name(self, team_id: UUID, name_keywords: list,  limit: int = 1, email: str = None):
+        if not name_keywords and not email:
             return []
-            
+
         conditions = []
-        for keyword in name_keywords:
-            conditions.append(Lead.name.ilike(f"%{keyword}%"))
+        if name_keywords:
+            name_conditions = [Lead.name.ilike(f"%{k}%") for k in name_keywords]
+            conditions.append(or_(*name_conditions))
             
+        # If a valid email is provided, prioritize matching by email OR name
+        if email and email != "no-email@provided.com":
+            conditions.append(Lead.email == email)
+
         query = (
             select(Lead)
             .where(Lead.team_id == team_id, or_(*conditions))
