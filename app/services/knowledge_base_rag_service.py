@@ -57,7 +57,7 @@ class KnowledgeBaseRAGService:
         return TOKEN_PATTERN.findall(text.lower())
 
     @staticmethod
-    def _chunk_text(text: str, chunk_size: int = 2200, overlap: int = 300) -> list[str]:
+    def _chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> list[str]:
         words = text.split()
         if not words:
             return []
