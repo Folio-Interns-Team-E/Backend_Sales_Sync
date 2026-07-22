@@ -77,11 +77,11 @@ async def logout(response: Response, refresh_token: str | None = Cookie(default=
 
 
 @router.post("/otp/request", response_model=ApiResponse[dict])
-async def request_otp(payload: OTPRequest, background_tasks: BackgroundTasks):
-    await request_otp_service(payload, background_tasks)
+async def request_otp(payload: OTPRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+    await request_otp_service(payload, background_tasks, db)
     return ApiResponse(
         success=True, 
-        message="Verification code sent successfully to your email.", 
+        message="Verification code sent to your email.", 
         data={}
     )
 

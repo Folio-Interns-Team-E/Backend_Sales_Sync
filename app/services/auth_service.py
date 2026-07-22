@@ -29,6 +29,18 @@ OTP_EXPIRY_SECONDS = 300
 
 
 async def register_user(payload: RegisterRequest, db: AsyncSession) -> RegisterResponse:
+    if not payload.full_name or not payload.full_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Full name is required."
+        )
+
+    if len(payload.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long."
+        )
+
     try:
         ensure_bcrypt_password_size(payload.password)
     except ValueError as exc:
@@ -42,8 +54,8 @@ async def register_user(payload: RegisterRequest, db: AsyncSession) -> RegisterR
 
     if existing_user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists. Try logging in instead."
         )
 
     new_user = User(
@@ -75,6 +87,18 @@ async def register_user(payload: RegisterRequest, db: AsyncSession) -> RegisterR
 
 
 async def login_user(payload: LoginRequest, db: AsyncSession):
+    if not payload.email or not payload.email.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email is required."
+        )
+
+    if not payload.password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password is required."
+        )
+
     try:
         ensure_bcrypt_password_size(payload.password)
     except ValueError as exc:
@@ -86,10 +110,16 @@ async def login_user(payload: LoginRequest, db: AsyncSession):
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(payload.password, user.hashed_password):
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
+            detail="No account found with this email. Please register first."
+        )
+
+    if not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect password. Please try again."
         )
 
     if not user.email_verified:
@@ -154,12 +184,21 @@ def generate_six_digit_otp() -> str:
     return f"{random.randint(100000, 999999)}"
 
 
-async def request_otp_service(payload: OTPRequest, background_tasks: BackgroundTasks):
+async def request_otp_service(payload: OTPRequest, background_tasks: BackgroundTasks, db: AsyncSession):
     redis_client = get_redis()
     if not redis_client:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Caching service unconfigured or unavailable."
+            detail="Verification service is temporarily unavailable. Please try again later."
+        )
+
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No account found with this email."
         )
 
     otp = generate_six_digit_otp()
@@ -171,7 +210,7 @@ async def request_otp_service(payload: OTPRequest, background_tasks: BackgroundT
         logger.error(f"Redis set failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate verification session."
+            detail="Failed to create verification session. Please try again."
         )
 
     background_tasks.add_task(send_otp_email, payload.email, otp)
@@ -182,7 +221,7 @@ async def verify_otp_service(payload: OTPVerifyRequest, db: AsyncSession) -> boo
     if not redis_client:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Caching service unconfigured or unavailable."
+            detail="Verification service is temporarily unavailable. Please try again later."
         )
 
     redis_key = f"otp:{payload.email}"
@@ -193,19 +232,19 @@ async def verify_otp_service(payload: OTPVerifyRequest, db: AsyncSession) -> boo
         logger.error(f"Redis get failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to complete code verification."
+            detail="Failed to verify code. Please try again."
         )
 
     if not stored_otp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="OTP has expired or was never requested."
+            detail="Verification code has expired. Please request a new one."
         )
 
     if stored_otp != payload.otp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid verification code."
+            detail="Invalid verification code. Please check and try again."
         )
 
     try:
