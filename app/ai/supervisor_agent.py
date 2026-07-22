@@ -140,8 +140,8 @@ class SupervisorAgent:
         except Exception as e:
             logger.error(f"SupervisorAgent synthesis failed: {e}", exc_info=True)
             return (
-                "The action was executed successfully, but SupervisorAgent encountered "
-                f"an issue rendering the conversational summary. Raw output: {execution_result}"
+                "The action was executed successfully"
+                f"{execution_result}"
             )
 
     async def _synthesize_response(

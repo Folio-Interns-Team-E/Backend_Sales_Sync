@@ -2,7 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import HTTPException, status
 from app.models.user import User
-from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, RegisterResponse
+from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, RegisterResponse, LoginResponse
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -12,7 +12,8 @@ from app.core.security import (
 )
 import random
 import logging
-from fastapi import HTTPException, status, BackgroundTasks
+from datetime import datetime, timedelta, timezone
+from fastapi import BackgroundTasks
 from app.schemas.auth import OTPRequest, OTPVerifyRequest
 from app.core.redis import get_redis
 
@@ -24,7 +25,9 @@ resend.api_key = settings.RESEND_API_KEY
 
 logger = logging.getLogger(__name__)
 
-#register user
+OTP_EXPIRY_SECONDS = 300
+
+
 async def register_user(payload: RegisterRequest, db: AsyncSession) -> RegisterResponse:
     try:
         ensure_bcrypt_password_size(payload.password)
@@ -33,39 +36,45 @@ async def register_user(payload: RegisterRequest, db: AsyncSession) -> RegisterR
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         )
-    
-    #if email alr exists
+
     result = await db.execute(select(User).where(User.email == payload.email))
     existing_user = result.scalar_one_or_none()
 
     if existing_user:
         raise HTTPException(
-            status_code = status.HTTP_400_BAD_REQUEST,
-            detail = "Email already registered"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
         )
-    
-    #creating a new user using the model
+
     new_user = User(
-        full_name = payload.full_name,
-        email = payload.email,
-        hashed_password = hash_password(payload.password),
-        #role=UserRole.admin  # first user is always admin
+        full_name=payload.full_name,
+        email=payload.email,
+        hashed_password=hash_password(payload.password),
     )
 
-    #changes in db
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
 
+    # Send OTP via Redis + Resend
+    redis_client = get_redis()
+    if redis_client:
+        otp = generate_six_digit_otp()
+        try:
+            redis_client.set(f"otp:{new_user.email}", otp, ex=OTP_EXPIRY_SECONDS)
+            await send_otp_email(new_user.email, otp)
+        except Exception:
+            logger.exception("Failed to send OTP after registration for %s", new_user.email)
 
     return RegisterResponse(
-        user_id = new_user.id,
-        full_name = new_user.full_name,
-        email = new_user.email
+        user_id=new_user.id,
+        full_name=new_user.full_name,
+        email=new_user.email,
+        needs_verification=True,
     )
 
-#login user
-async def login_user(payload: LoginRequest, db: AsyncSession) -> TokenResponse:
+
+async def login_user(payload: LoginRequest, db: AsyncSession):
     try:
         ensure_bcrypt_password_size(payload.password)
     except ValueError as exc:
@@ -74,40 +83,35 @@ async def login_user(payload: LoginRequest, db: AsyncSession) -> TokenResponse:
             detail=str(exc),
         )
 
-    #get user by email
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
 
-    #if password wrong or user doesn't exist
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(
-            status_code = status.HTTP_401_UNAUTHORIZED,
-            detail = "Invalid credentials"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials"
         )
-    '''
+
     if not user.email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please verify your email before logging in.",
-        )
-    '''
-    
-    #else
+        return LoginResponse(
+            needs_verification=True,
+            email=user.email,
+        ), None
+
     token = create_access_token({"sub": str(user.id)})
     refresh_token = create_refresh_token({"sub": str(user.id)})
 
-    return TokenResponse(
-        access_token = token,
-        user_id = user.id,
-        full_name = user.full_name,
-        email = user.email
+    return LoginResponse(
+        needs_verification=False,
+        access_token=token,
+        user_id=user.id,
+        full_name=user.full_name,
+        email=user.email,
     ), refresh_token
 
-#logout user
-async def logout_user(current_user: User):
-    #client side
-    return None
 
+async def logout_user(current_user: User):
+    return None
 
 
 async def send_otp_email(email: str, otp: str):
@@ -134,21 +138,21 @@ async def send_otp_email(email: str, otp: str):
                         {otp}
                     </div>
 
-                    <p>This code expires in <strong>10 minutes</strong>.</p>
+                    <p>This code expires in <strong>5 minutes</strong>.</p>
                     <p>If you didn't request this code, you can safely ignore this email.</p>
                 </div>
                 """,
             }
         )
-
         logger.info("OTP email sent to %s", email)
-
     except Exception:
         logger.exception("Failed to send OTP email to %s", email)
         raise
 
+
 def generate_six_digit_otp() -> str:
     return f"{random.randint(100000, 999999)}"
+
 
 async def request_otp_service(payload: OTPRequest, background_tasks: BackgroundTasks):
     redis_client = get_redis()
@@ -160,22 +164,20 @@ async def request_otp_service(payload: OTPRequest, background_tasks: BackgroundT
 
     otp = generate_six_digit_otp()
     redis_key = f"otp:{payload.email}"
-    
+
     try:
-        # Using synchronous execution since your core setup uses the sync Upstash client
-        redis_client.set(redis_key, otp, ex=300)
+        redis_client.set(redis_key, otp, ex=OTP_EXPIRY_SECONDS)
     except Exception as e:
         logger.error(f"Redis set failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to generate verification session."
         )
-    
-    # Safely hand off email execution to the background worker
+
     background_tasks.add_task(send_otp_email, payload.email, otp)
 
 
-async def verify_otp_service(payload: OTPVerifyRequest) -> bool:
+async def verify_otp_service(payload: OTPVerifyRequest, db: AsyncSession) -> bool:
     redis_client = get_redis()
     if not redis_client:
         raise HTTPException(
@@ -184,33 +186,37 @@ async def verify_otp_service(payload: OTPVerifyRequest) -> bool:
         )
 
     redis_key = f"otp:{payload.email}"
-    
+
     try:
-        # Sync retrieval matching your core configuration
         stored_otp = redis_client.get(redis_key)
     except Exception as e:
         logger.error(f"Redis get failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to complete code verification link."
+            detail="Failed to complete code verification."
         )
-    
+
     if not stored_otp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="OTP has expired or was never requested."
         )
-        
+
     if stored_otp != payload.otp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid verification code."
         )
-        
-    # Prevent replay attacks by clearing out the verified key instantly
+
     try:
         redis_client.delete(redis_key)
     except Exception as e:
         logger.warning(f"Failed to clear key {redis_key} post-verification: {e}")
-        
+
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+    if user:
+        user.email_verified = True
+        await db.commit()
+
     return True

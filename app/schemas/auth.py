@@ -34,16 +34,24 @@ class TokenResponse(BaseModel):
     full_name: str
     email: EmailStr
 
-    #no clue what this is
     class Config:
         from_attributes = True
 
+
+class LoginResponse(BaseModel):
+    needs_verification: bool = False
+    email: str | None = None
+    access_token: str | None = None
+    token_type: str = "bearer"
+    user_id: UUID | None = None
+    full_name: str | None = None
 
 
 class RegisterResponse(BaseModel):
     user_id: UUID
     full_name: str
     email: str
+    needs_verification: bool = True
 
     class Config:
         from_attributes = True

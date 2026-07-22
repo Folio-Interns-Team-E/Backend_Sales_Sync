@@ -5,7 +5,7 @@ from app.schemas.auth import OTPRequest, OTPVerifyRequest
 from app.schemas.common import ApiResponse
 from app.services.auth_service import request_otp_service, verify_otp_service
 from app.database import get_db
-from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, RegisterResponse
+from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, RegisterResponse, LoginResponse
 from app.schemas.common import ApiResponse
 from app.services.auth_service import register_user, login_user, logout_user
 from app.middleware.auth_middleware import get_current_user
@@ -20,10 +20,10 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/register", response_model=ApiResponse[RegisterResponse], status_code=status.HTTP_201_CREATED)
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
     token = await register_user(payload, db)
-    return ApiResponse(success=True, message="Account created successfully", data=token)
+    return ApiResponse(success=True, message="Account created successfully. Please verify your email.", data=token)
 
 #login endpoint
-@router.post("/login", response_model=ApiResponse[TokenResponse])
+@router.post("/login", response_model=ApiResponse[LoginResponse])
 async def login(
     payload: LoginRequest,
     response: Response,
@@ -31,6 +31,12 @@ async def login(
 ):
     result, refresh_token = await login_user(payload, db)
 
+    if result.needs_verification:
+        return ApiResponse(
+            success=True,
+            message="Email not verified",
+            data=result
+        )
 
     response.set_cookie(
         key="refresh_token",
@@ -80,10 +86,10 @@ async def request_otp(payload: OTPRequest, background_tasks: BackgroundTasks):
     )
 
 @router.post("/otp/verify", response_model=ApiResponse[dict])
-async def verify_otp(payload: OTPVerifyRequest):
-    await verify_otp_service(payload)
+async def verify_otp(payload: OTPVerifyRequest, db: AsyncSession = Depends(get_db)):
+    await verify_otp_service(payload, db)
     return ApiResponse(
         success=True, 
-        message="OTP verified successfully.", 
+        message="Email verified successfully.", 
         data={}
     )
