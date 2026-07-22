@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from app.database import get_db
-from app.middleware.auth_middleware import get_current_user
+from app.middleware.auth_middleware import get_current_user, get_team_context, TeamContext
 from app.models.user import User
 from app.schemas.chat import ChatRequest, ChatResponse, ChatMessageResponse, ChatUpdateRequest
 from app.schemas.common import ApiResponse
@@ -14,10 +14,10 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 @router.get("/", response_model=ApiResponse[list[ChatMessageResponse]])
 async def list_messages(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = ChatService(db)
-    messages = await service.list_messages(current_user.id)
+    messages = await service.list_messages(team_ctx.team_id)
     return ApiResponse(success=True, message="Messages fetched successfully", data=messages)
 
 
@@ -25,10 +25,10 @@ async def list_messages(
 async def get_message(
     message_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = ChatService(db)
-    message = await service.get_message(message_id, current_user.id)
+    message = await service.get_message(message_id, team_ctx.team_id)
     return ApiResponse(success=True, message="Message fetched successfully", data=message)
 
 
@@ -37,10 +37,10 @@ async def update_message(
     message_id: UUID,
     payload: ChatUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = ChatService(db)
-    message = await service.update_message(message_id, current_user.id, payload.content)
+    message = await service.update_message(message_id, team_ctx.team_id, payload.content)
     return ApiResponse(success=True, message="Message updated successfully", data=message)
 
 
@@ -48,10 +48,10 @@ async def update_message(
 async def delete_message(
     message_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = ChatService(db)
-    await service.delete_message(message_id, current_user.id)
+    await service.delete_message(message_id, team_ctx.team_id)
     return ApiResponse(success=True, message="Message deleted", data={})
 
 
@@ -60,10 +60,11 @@ async def chat(
     payload: ChatRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = ChatService(db)
     try:
-        reply = await service.send_message(current_user.id, payload.message)
+        reply = await service.send_message(current_user.id, team_ctx.team_id, payload.message)
         return ApiResponse(
             success=True,
             message="Chat response generated",

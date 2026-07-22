@@ -3,8 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from typing import Optional
 from app.database import get_db
-from app.middleware.auth_middleware import get_current_user
-from app.models.user import User
+from app.middleware.auth_middleware import get_team_context, TeamContext
 from app.schemas.knowledge_base import (
     KnowledgeAssetResponse,
     KnowledgeAssetUpdate,
@@ -23,10 +22,10 @@ router = APIRouter(prefix="/knowledge-base", tags=["knowledge-base"])
 @router.get("/", response_model=ApiResponse[list[KnowledgeAssetResponse]])
 async def list_assets(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = KnowledgeBaseService(db)
-    assets = await service.list_assets(current_user.id)
+    assets = await service.list_assets(team_ctx.team_id)
     return ApiResponse(success=True, message="Assets fetched successfully", data=assets)
 
 
@@ -34,10 +33,10 @@ async def list_assets(
 async def get_asset(
     asset_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = KnowledgeBaseService(db)
-    asset = await service.get_asset(asset_id, current_user.id)
+    asset = await service.get_asset(asset_id, team_ctx.team_id)
     return ApiResponse(success=True, message="Asset fetched successfully", data=asset)
 
 
@@ -46,23 +45,21 @@ async def upload_asset(
     file: UploadFile = File(...),
     title: str = Form(...),
     description: Optional[str] = Form(None),
-    tags: Optional[str] = Form(None),  # comma-separated e.g. "sales,q3,proposal"
+    tags: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
-    # Validate file type
     if file.content_type not in ["application/pdf"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only PDF files are supported"
         )
     
-    # Parse tags from comma-separated string
     tag_list = [t.strip() for t in tags.split(",")] if tags else []
     
     service = KnowledgeBaseService(db)
     asset = await service.upload_asset(
-        current_user.id,
+        team_ctx.team_id,
         title=title,
         file=file,
         description=description,
@@ -76,11 +73,11 @@ async def update_asset(
     asset_id: UUID,
     payload: KnowledgeAssetUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = KnowledgeBaseService(db)
     asset = await service.update_asset(
-        asset_id, current_user.id,
+        asset_id, team_ctx.team_id,
         title=payload.title, description=payload.description, tags=payload.tags,
     )
     return ApiResponse(success=True, message="Asset updated successfully", data=asset)
@@ -90,10 +87,10 @@ async def update_asset(
 async def delete_asset(
     asset_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = KnowledgeBaseService(db)
-    await service.delete_asset(asset_id, current_user.id)
+    await service.delete_asset(asset_id, team_ctx.team_id)
     return ApiResponse(success=True, message="Asset deleted", data={})
 
 
@@ -101,11 +98,10 @@ async def delete_asset(
 async def search_knowledge_base(
     payload: KnowledgeBaseSearchRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = KnowledgeBaseRAGService(db)
-    team = await service._get_user_team(current_user.id)
-    sources = await service.search(team.id, payload.query, limit=payload.limit)
+    sources = await service.search(team_ctx.team_id, payload.query, limit=payload.limit)
     return ApiResponse(
         success=True,
         message="Knowledge base search completed successfully",
@@ -120,11 +116,10 @@ async def search_knowledge_base(
 async def ask_knowledge_base(
     payload: KnowledgeBaseSearchRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = KnowledgeBaseRAGService(db)
-    team = await service._get_user_team(current_user.id)
-    answer = await service.answer_query(team.id, payload.query, limit=payload.limit)
+    answer = await service.answer_query(team_ctx.team_id, payload.query, limit=payload.limit)
     return ApiResponse(
         success=True,
         message="Knowledge base answer generated successfully",

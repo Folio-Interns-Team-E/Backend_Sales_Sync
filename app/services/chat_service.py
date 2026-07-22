@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import uuid
 from app.models.team import Team
-from app.models.team_member import TeamMember
 from app.models.chat import ChatMessage, ChatRole
 from app.models.proposal import Proposal, ProposalTemplate
 from sqlalchemy import desc
@@ -34,43 +33,29 @@ logger = logging.getLogger(__name__)
 
 class ChatService(ChatAgentsService):
 
-    async def _get_user_team(self, user_id: UUID):
-        result = await self.db.execute(
-            select(TeamMember).where(TeamMember.user_id == user_id)
-        )
-        membership = result.scalar_one_or_none()
-
-        if not membership:
-            raise ValueError("User has no team")
-
-        result = await self.db.execute(
-            select(Team).where(Team.id == membership.team_id)
-        )
+    async def _get_team(self, team_id: UUID):
+        result = await self.db.execute(select(Team).where(Team.id == team_id))
         team = result.scalar_one_or_none()
-
         if not team:
             raise ValueError("Team not found")
-
         return team
 
-    async def update_icp(self, user_id: UUID, new_icp: str):
-        team = await self._get_user_team(user_id)
+    async def update_icp(self, team_id: UUID, new_icp: str):
+        team = await self._get_team(team_id)
         team.icp = new_icp
         await self.db.commit()
         return team.icp
 
-    async def _get_icp_context(self, user_id: UUID):
-        team = await self._get_user_team(user_id)
+    async def _get_icp_context(self, team_id: UUID):
+        team = await self._get_team(team_id)
         return team.icp if team.icp else "No ICP available"
 
 
     
-    async def list_messages(self, user_id: UUID):
-        team = await self._get_user_team(user_id)
-
+    async def list_messages(self, team_id: UUID):
         result = await self.db.execute(
             select(ChatMessage)
-            .where(ChatMessage.team_id == team.id)
+            .where(ChatMessage.team_id == team_id)
             .order_by(desc(ChatMessage.created_at))
         )
         messages = result.scalars().all()
@@ -78,12 +63,11 @@ class ChatService(ChatAgentsService):
         data = [ChatMessageResponse.model_validate(m).model_dump(mode="json") for m in messages]
         return data
 
-    async def get_message(self, message_id: UUID, user_id: UUID):
-        team = await self._get_user_team(user_id)
+    async def get_message(self, message_id: UUID, team_id: UUID):
         result = await self.db.execute(
             select(ChatMessage).where(
                 ChatMessage.id == message_id,
-                ChatMessage.team_id == team.id,
+                ChatMessage.team_id == team_id,
             )
         )
         message = result.scalar_one_or_none()
@@ -91,8 +75,8 @@ class ChatService(ChatAgentsService):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
         return message
 
-    async def update_message(self, message_id: UUID, user_id: UUID, content: str):
-        message = await self.get_message(message_id, user_id)
+    async def update_message(self, message_id: UUID, team_id: UUID, content: str):
+        message = await self.get_message(message_id, team_id)
         if message.sent_by != ChatRole.USER.value:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -102,22 +86,20 @@ class ChatService(ChatAgentsService):
         message.metadata_log = {**(message.metadata_log or {}), "edited": True}
         await self.db.commit()
         await self.db.refresh(message)
-        team = await self._get_user_team(user_id)
         return message
 
-    async def delete_message(self, message_id: UUID, user_id: UUID):
-        message = await self.get_message(message_id, user_id)
-        team = await self._get_user_team(user_id)
+    async def delete_message(self, message_id: UUID, team_id: UUID):
+        message = await self.get_message(message_id, team_id)
         await self.db.delete(message)
         await self.db.commit()
 
     # =====================================================
     # MAIN CHAT ROUTER
     # =====================================================
-    async def send_message(self, user_id: UUID, message: str):
+    async def send_message(self, user_id: UUID, team_id: UUID, message: str):
         try:
-            team = await self._get_user_team(user_id)
-            icp = await self._get_icp_context(user_id)
+            team = await self._get_team(team_id)
+            icp = team.icp if team.icp else "No ICP available"
 
             supervisor = SupervisorAgent(self.db)
 
@@ -177,7 +159,7 @@ class ChatService(ChatAgentsService):
                 refined_icp = await icp_agent.refine_icp(message)
                     
                     # 3. Update the database record with the highly structured ICP
-                await self.update_icp(user_id, refined_icp)
+                await self.update_icp(team_id, refined_icp)
 
                 print("===================NEW ICP===================\n\n")
                 print(refined_icp)
@@ -198,28 +180,22 @@ class ChatService(ChatAgentsService):
                 else:
                     response = f"Found and saved {len(pool_leads)} leads to your workspace:\n\n"
                     for pool_lead in pool_leads:
-                        # 1. Standardize the values first to query against them
                         name = pool_lead.full_name or f"{pool_lead.first_name or ''} {pool_lead.last_name or ''}".strip() or "Unknown"
                         email = pool_lead.email or "no-email@provided.com"
-                        team_id = team.id
+                        team_id_val = team.id
 
-                        # 2. Check if a lead already exists with (same name AND team_id) OR (same email AND team_id)
-                        # We skip the check if the email is "no-email@provided.com" to avoid blocking multiple leads with missing emails
-                        email_filter = (Lead.email == email) & (Lead.team_id == team_id) if email != "no-email@provided.com" else False
-                        name_filter = (Lead.name == name) & (Lead.team_id == team_id)
+                        email_filter = (Lead.email == email) & (Lead.team_id == team_id_val) if email != "no-email@provided.com" else False
+                        name_filter = (Lead.name == name) & (Lead.team_id == team_id_val)
 
-                        # Construct an asynchronous select query
                         stmt = select(Lead).where(name_filter | email_filter)
                         result = await self.db.execute(stmt)
                         exists = result.scalar_one_or_none()
 
                         if exists:
-                            # Skip adding and skip counting in response
                             continue
 
-                        # 3. Create and add the new lead if no duplicate exists
                         new_lead = Lead(
-                            team_id=team_id,
+                            team_id=team_id_val,
                             name=name,
                             email=email,
                             status=LeadStatus.NEW.value,
@@ -238,16 +214,11 @@ class ChatService(ChatAgentsService):
                         self.db.add(new_lead)
                         response += f"- {new_lead.name} | {new_lead.job_title} | {new_lead.company_name} | {new_lead.email}\n"
 
-            # =====================================================
-            # ACTION SUBROUTINE: ANALYZE_LEAD
-            # =====================================================
             elif action == "ANALYZE_LEAD":
              
-                # 1. Gather configuration and parameters
                 name_keywords = params.get("keywords", [])
-                limit = min(params.get("limit", 10), 10)  # Allow up to 10 leads concurrently
+                limit = min(params.get("limit", 10), 10)
                 
-                # 2. Search for the requested leads
                 current_leads = await self.search_current_leads_by_name(team.id, name_keywords, limit=limit)
                 
                 if not current_leads:
@@ -255,21 +226,15 @@ class ChatService(ChatAgentsService):
                     response = f"Could not find any leads matching '{target_name}' in your current workspace pipeline to analyze."
                 
                 else:
-                    # Instantiate our isolated Agent
                     analyzer_agent = LeadAnalyzerAgent(
                         model=self.MODEL,
                         base_url=self.BASE_URL,
                         api_key=settings.grok_api_key
                     )
                     
-                    # Concurrency Gate: Limit only the LLM API calls to 2 parallel worker agents
                     semaphore = asyncio.Semaphore(2)
                     
                     async def analyze_lead_task(lead) -> dict:
-                        """
-                        Runs only the external API call concurrently. 
-                        Does NOT touch the DB session inside the parallel task.
-                        """
                         async with semaphore:
                             raw_context = lead.ai_context_data if lead.ai_context_data else {}
                             profile_payload = {
@@ -281,7 +246,6 @@ class ChatService(ChatAgentsService):
                             }
                             
                             try:
-                                # Execute the external LLM profiling agent
                                 analysis = await analyzer_agent.analyze_fit(profile_payload, icp)
                                 return {
                                     "lead_id": lead.id,
@@ -297,14 +261,11 @@ class ChatService(ChatAgentsService):
                                     "error": str(e)
                                 }
 
-                    # Step 1: Fire off the parallel LLM API workers (Capped at 2)
                     tasks = [analyze_lead_task(lead) for lead in current_leads]
                     analysis_results = await asyncio.gather(*tasks)
                     
-                    # Map analysis results by lead ID for fast lookup
                     results_by_id = {res["lead_id"]: res for res in analysis_results}
                     
-                    # Step 2: Update the DB models sequentially on the main thread session
                     summary_lines = []
                     summary_lines.append(f"Successfully processed {len(current_leads)} leads using parallel workers.\n")
                     
@@ -313,7 +274,6 @@ class ChatService(ChatAgentsService):
                             res = results_by_id.get(lead.id)
                             
                             if res and res["success"]:
-                                # Modify properties on the lead object safely
                                 lead.status = LeadStatus.ANALYZED.value
                                 lead.score = res["score"]
                                 
@@ -322,7 +282,6 @@ class ChatService(ChatAgentsService):
                                 updated_context["evaluation_justification"] = res["justification"]
                                 lead.ai_context_data = updated_context
                                 
-                                # Track changes in session
                                 self.db.add(lead)
                                 
                                 summary_lines.append(
@@ -339,11 +298,9 @@ class ChatService(ChatAgentsService):
                                     f"Error: {error_msg}\n"
                                 )
                         
-                        # Step 3: Explicitly commit the transaction to persist updates
                         await self.db.commit()
                         
                     except Exception as db_err:
-                        # Rollback transaction if database save fails
                         await self.db.rollback()
                         logger.error(f"Database update failed, rolling back: {str(db_err)}")
                         summary_lines = [f"An error occurred while saving analysis details to the database: `{str(db_err)}`"]
@@ -363,7 +320,6 @@ class ChatService(ChatAgentsService):
                 else:
                     existing_lead = current_leads[0]
                     
-                    # Package lead context for the LLM copywriter
                     profile_payload = {
                         "name": existing_lead.name,
                         "title": existing_lead.job_title,
@@ -372,16 +328,12 @@ class ChatService(ChatAgentsService):
                         "raw_data": existing_lead.ai_context_data.get("raw_pool_data", {})
                     }
                     
-                    # Instantiate the isolated EmailAgent
                     email_agent = EmailAgent()
 
-                    # 1. Generate customized email text
                     email_content = await email_agent.generate_custom_email(profile_payload, icp, message)
 
-                    # 2. Evaluate the output using the self-review model
                     evaluation = await email_agent.evaluate_email(email_content, profile_payload, icp, message)
 
-                    # 3. Revision pass if rejection triggers
                     if not evaluation.get("approved", True):
                         email_content = await email_agent.generate_custom_email(
                             profile_payload,
@@ -393,10 +345,9 @@ class ChatService(ChatAgentsService):
                     subject = email_content.get("subject", "Quick Question")
                     body = email_content.get("body", "")
                     
-                    # 4. Store the draft using your existing EmailService
                     email_service = EmailService(self.db)
                     drafted_record = await email_service.draft_email(
-                        user_id=user_id,
+                        team_id=team_id,
                         lead_id=existing_lead.id,
                         subject=subject,
                         body=body
@@ -433,8 +384,6 @@ class ChatService(ChatAgentsService):
                     if current_leads:
                         lead_id = current_leads[0].id
 
-                # 1. Initialize dedicated ProposalAgent & compile proposal + binary docx stream
-
                 template_query = (
                     select(ProposalTemplate)
                     .where(ProposalTemplate.team_id == team.id)
@@ -459,7 +408,6 @@ class ChatService(ChatAgentsService):
                     template_id=template_id
                 )
 
-                # 2. Upload file stream to S3
                 file_bytes = file_bytes_stream.getvalue()
                 file_url = await upload_to_s3(
                     file_bytes=file_bytes,
@@ -469,9 +417,6 @@ class ChatService(ChatAgentsService):
                     user_id=str(user_id),
                 )
 
-
-
-                # 3. Save a Proposal record in the database
                 await asyncio.sleep(1)
                 _, raw_proposal_json, styles = await proposal_agent._compile_proposal_data(
                     user_prompt=message, 
@@ -487,10 +432,6 @@ class ChatService(ChatAgentsService):
                     generated_proposal_data=raw_proposal_json,
                     icp_context=team.icp if team.icp else "Standard Enterprise B2B SaaS and Professional Solutions."
                 )
-
-                print("===================Proposal===================\n\n")
-                print(raw_proposal_json)
-                print("======================================\n\n")
 
                 print("===================Proposal===================\n\n")
                 print(raw_proposal_json)
@@ -522,18 +463,11 @@ class ChatService(ChatAgentsService):
                 )
 
                 try:
-                    # 1. Ensure any prior transactions are clean
                     if not self.db.is_active:
                         await self.db.rollback()
 
-                    # 2. Add the proposal record
                     self.db.add(proposal)
-                    
-                    # 3. Commit the database changes
                     await self.db.commit() 
-                    
-                    # 4. CRITICAL: Refresh the model to keep its attributes loaded in memory 
-                    # so FastAPI can safely read them for the response serialization
                     await self.db.refresh(proposal)
                     
                     logger.info("--- DATABASE COMMIT & REFRESH SUCCESSFUL ---")
@@ -579,7 +513,6 @@ class ChatService(ChatAgentsService):
                 user_info=user_info
             )
             
-            # Save the AI's generated response to the DB to preserve conversational context
             self.db.add(
                 ChatMessage(
                     team_id=team.id,

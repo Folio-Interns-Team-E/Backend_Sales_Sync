@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.middleware.auth_middleware import get_current_user
-from app.models.user import User
+from app.middleware.auth_middleware import get_team_context, TeamContext
 from app.schemas.onboarding import OnboardingRequest, OnboardingResponse
 from app.schemas.common import ApiResponse
 from app.services.onboarding_service import OnboardingService
@@ -17,11 +16,11 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 async def submit_onboarding(
     request: OnboardingRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = OnboardingService(db)
     icp_text = await service.submit_onboarding(
-        current_user.id,
+        team_ctx.team_id,
         request.product_name,
         request.product_description,
         request.target_customer,
@@ -37,10 +36,10 @@ async def submit_onboarding(
 @router.get("/status", response_model=ApiResponse[OnboardingResponse])
 async def get_onboarding_status(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = OnboardingService(db)
-    status_data = await service.get_onboarding(current_user.id)
+    status_data = await service.get_onboarding(team_ctx.team_id)
     return ApiResponse(
         success=True,
         message="Onboarding status fetched",
@@ -55,10 +54,10 @@ async def get_onboarding_status(
 @router.get("/icp", response_model=ApiResponse[OnboardingResponse])
 async def get_icp(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = OnboardingService(db)
-    status_data = await service.get_onboarding(current_user.id)
+    status_data = await service.get_onboarding(team_ctx.team_id)
     return ApiResponse(
         success=True,
         message="ICP fetched successfully",
@@ -74,10 +73,10 @@ async def get_icp(
 @router.delete("/icp", response_model=ApiResponse[dict])
 async def delete_icp(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = OnboardingService(db)
-    await service.delete_onboarding(current_user.id)
+    await service.delete_onboarding(team_ctx.team_id)
     return ApiResponse(success=True, message="ICP reset successfully", data={})
 
 
@@ -85,11 +84,11 @@ async def delete_icp(
 async def update_icp(
     request: OnboardingRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = OnboardingService(db)
     icp_text = await service.update_onboarding(
-        current_user.id,
+        team_ctx.team_id,
         request.product_name,
         request.product_description,
         request.target_customer,

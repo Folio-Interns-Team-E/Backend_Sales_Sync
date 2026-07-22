@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from app.database import get_db
-from app.middleware.auth_middleware import get_current_user
+from app.middleware.auth_middleware import get_current_user, get_team_context, TeamContext
 from app.models.user import User
 from app.schemas.leads import LeadCreate, LeadUpdate, LeadPatch, LeadResponse, LeadListResponse
 from app.schemas.common import ApiResponse
@@ -15,10 +15,10 @@ router = APIRouter(prefix="/leads", tags=["leads"])
 async def list_leads(
     status: str = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = LeadService(db)
-    leads = await service.list_leads(current_user.id, status)
+    leads = await service.list_leads(team_ctx.team_id, status)
     return ApiResponse(success=True, message="Leads fetched successfully", data=leads)
 
 
@@ -26,10 +26,10 @@ async def list_leads(
 async def get_lead(
     lead_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = LeadService(db)
-    lead = await service.get_lead(lead_id, current_user.id)
+    lead = await service.get_lead(lead_id, team_ctx.team_id)
     return ApiResponse(success=True, message="Lead fetched successfully", data=lead)
 
 
@@ -37,11 +37,11 @@ async def get_lead(
 async def create_lead(
     payload: LeadCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = LeadService(db)
     lead = await service.create_lead(
-        current_user.id, payload.name, payload.company,
+        team_ctx.team_id, payload.name, payload.company,
         payload.title, payload.email, payload.source
     )
     return ApiResponse(success=True, message="Lead created successfully", data=lead)
@@ -52,11 +52,11 @@ async def update_lead(
     lead_id: UUID,
     payload: LeadPatch,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = LeadService(db)
     lead = await service.update_lead(
-        lead_id, current_user.id,
+        lead_id, team_ctx.team_id,
         name=payload.name, company=payload.company,
         title=payload.title, email=payload.email,
         source=payload.source,
@@ -69,10 +69,10 @@ async def update_lead_status(
     lead_id: UUID,
     payload: LeadUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = LeadService(db)
-    lead = await service.update_lead_status(lead_id, current_user.id, payload.status)
+    lead = await service.update_lead_status(lead_id, team_ctx.team_id, payload.status)
     return ApiResponse(success=True, message="Lead status updated", data=lead)
 
 
@@ -80,10 +80,10 @@ async def update_lead_status(
 async def qualify_lead(
     lead_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = LeadService(db)
-    lead = await service.qualify_lead(lead_id, current_user.id)
+    lead = await service.qualify_lead(lead_id, team_ctx.team_id)
     return ApiResponse(success=True, message="Lead qualified", data=lead)
 
 
@@ -91,10 +91,10 @@ async def qualify_lead(
 async def discard_lead(
     lead_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = LeadService(db)
-    lead = await service.discard_lead(lead_id, current_user.id)
+    lead = await service.discard_lead(lead_id, team_ctx.team_id)
     return ApiResponse(success=True, message="Lead discarded", data=lead)
 
 
@@ -102,8 +102,8 @@ async def discard_lead(
 async def delete_lead(
     lead_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = LeadService(db)
-    await service.delete_lead(lead_id, current_user.id)
+    await service.delete_lead(lead_id, team_ctx.team_id)
     return ApiResponse(success=True, message="Lead deleted", data={})

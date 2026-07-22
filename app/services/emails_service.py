@@ -6,8 +6,6 @@ from sqlalchemy import select, desc
 from fastapi import HTTPException, status
 from app.models.email import Email, EmailStatus
 from app.models.lead import Lead
-from app.models.team import Team
-from app.models.team_member import TeamMember
 from app.schemas.emails import EmailResponse
 
 logger = logging.getLogger(__name__)
@@ -17,43 +15,32 @@ class EmailService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def _get_user_team(self, user_id: UUID) -> Team:
-        result = await self.db.execute(
-            select(TeamMember).where(TeamMember.user_id == user_id)
-        )
-        membership = result.scalar_one_or_none()
-        if not membership:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User has no team")
-        result = await self.db.execute(select(Team).where(Team.id == membership.team_id))
-        team = result.scalar_one_or_none()
-        return team
-
-    async def get_email(self, email_id: UUID, user_id: UUID):
-        team = await self._get_user_team(user_id)
+    async def get_email(self, email_id: UUID, team_id: UUID):
         result = await self.db.execute(
             select(Email)
             .join(Lead, Email.lead_id == Lead.id)
-            .where(Email.id == email_id, Lead.team_id == team.id)
+            .where(Email.id == email_id, Lead.team_id == team_id)
         )
         email = result.scalar_one_or_none()
         if not email:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
         return email
 
-    async def list_emails(self, user_id: UUID, lead_id: UUID):
-        team = await self._get_user_team(user_id)
-        query = select(Email).where(Email.lead_id == lead_id)
-        query = query.order_by(desc(Email.sent_at))
-        result = await self.db.execute(query)
+    async def list_emails(self, team_id: UUID, lead_id: UUID):
+        result = await self.db.execute(
+            select(Email)
+            .join(Lead, Email.lead_id == Lead.id)
+            .where(Email.lead_id == lead_id, Lead.team_id == team_id)
+            .order_by(desc(Email.sent_at))
+        )
         emails = result.scalars().all()
         data = [EmailResponse.model_validate(e).model_dump(mode="json") for e in emails]
         return data
 
-    async def create_email(self, user_id: UUID, lead_id: UUID, subject: str,
+    async def create_email(self, team_id: UUID, lead_id: UUID, subject: str,
                            body: str, tone: str = "Professional"):
-        team = await self._get_user_team(user_id)
         result = await self.db.execute(
-            select(Lead).where(Lead.id == lead_id, Lead.team_id == team.id)
+            select(Lead).where(Lead.id == lead_id, Lead.team_id == team_id)
         )
         lead = result.scalar_one_or_none()
         if not lead:
@@ -73,8 +60,14 @@ class EmailService:
         await self.db.refresh(email)
         return email
 
-    async def draft_email(self, user_id: UUID, lead_id: UUID, subject: str, body: str):
-        team = await self._get_user_team(user_id)
+    async def draft_email(self, team_id: UUID, lead_id: UUID, subject: str, body: str):
+        result = await self.db.execute(
+            select(Lead).where(Lead.id == lead_id, Lead.team_id == team_id)
+        )
+        lead = result.scalar_one_or_none()
+        if not lead:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
+
         email = Email(
             lead_id=lead_id,
             subject=subject,
@@ -82,21 +75,15 @@ class EmailService:
             status=EmailStatus.DRAFT,
         )
         self.db.add(email)
-
-        result = await self.db.execute(
-            select(Lead).where(Lead.id == lead_id, Lead.team_id == team.id)
-        )
-        lead = result.scalar_one_or_none()
-        if lead:
-            lead.status = "Drafted"
+        lead.status = "Drafted"
         await self.db.commit()
         await self.db.refresh(email)
         return email
 
-    async def update_email(self, email_id: UUID, user_id: UUID,
+    async def update_email(self, email_id: UUID, team_id: UUID,
                             subject: str | None = None,
                             body: str | None = None):
-        email = await self.get_email(email_id, user_id)
+        email = await self.get_email(email_id, team_id)
         if email.status == EmailStatus.SENT:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -110,13 +97,11 @@ class EmailService:
         await self.db.refresh(email)
         return email
 
-    async def delete_email(self, email_id: UUID, user_id: UUID):
-        team = await self._get_user_team(user_id)
-
+    async def delete_email(self, email_id: UUID, team_id: UUID):
         result = await self.db.execute(
             select(Email)
             .join(Lead, Email.lead_id == Lead.id)
-            .where(Email.id == email_id, Lead.team_id == team.id)
+            .where(Email.id == email_id, Lead.team_id == team_id)
         )
         email = result.scalar_one_or_none()
 
@@ -132,6 +117,5 @@ class EmailService:
                 detail="Cannot delete a sent email"
             )
 
-        lead_id = email.lead_id
         await self.db.delete(email)
         await self.db.commit()

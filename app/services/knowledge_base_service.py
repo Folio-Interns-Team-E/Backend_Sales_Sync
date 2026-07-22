@@ -9,8 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from fastapi import HTTPException, status, UploadFile
 from app.models.knowledge_base import KnowledgeAsset
-from app.models.team import Team
-from app.models.team_member import TeamMember
 from app.config import settings
 from app.core.s3 import generate_presigned_url
 from app.services.knowledge_base_rag_service import KnowledgeBaseRAGService
@@ -35,32 +33,14 @@ class KnowledgeBaseService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def _get_user_team(self, user_id: UUID) -> Team:
-        result = await self.db.execute(
-            select(TeamMember).where(TeamMember.user_id == user_id)
-        )
-        membership = result.scalar_one_or_none()
-        if not membership:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="User has no team"
-            )
-        result = await self.db.execute(
-            select(Team).where(Team.id == membership.team_id)
-        )
-        team = result.scalar_one_or_none()
-        return team
-
     def _attach_presigned(self, asset):
         if asset.file_url and "amazonaws.com" in asset.file_url:
             asset.presigned_url = generate_presigned_url(asset.file_url)
 
-    async def list_assets(self, user_id: UUID):
-        team = await self._get_user_team(user_id)
-
+    async def list_assets(self, team_id: UUID):
         query = (
             select(KnowledgeAsset)
-            .where(KnowledgeAsset.team_id == team.id)
+            .where(KnowledgeAsset.team_id == team_id)
             .order_by(desc(KnowledgeAsset.created_at))
         )
         result = await self.db.execute(query)
@@ -69,12 +49,11 @@ class KnowledgeBaseService:
         data = [KnowledgeAssetResponse.model_validate(a).model_dump(mode="json") for a in assets]
         return data
 
-    async def get_asset(self, asset_id: UUID, user_id: UUID):
-        team = await self._get_user_team(user_id)
+    async def get_asset(self, asset_id: UUID, team_id: UUID):
         result = await self.db.execute(
             select(KnowledgeAsset).where(
                 KnowledgeAsset.id == asset_id,
-                KnowledgeAsset.team_id == team.id
+                KnowledgeAsset.team_id == team_id
             )
         )
         asset = result.scalar_one_or_none()
@@ -88,19 +67,17 @@ class KnowledgeBaseService:
 
     async def upload_asset(
         self,
-        user_id: UUID,
+        team_id: UUID,
         title: str,
         file: UploadFile,
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
     ):
-        team = await self._get_user_team(user_id)
-
         file_content = await file.read()
         file_size = len(file_content)
 
         safe_filename = _sanitize_filename(file.filename or "upload")
-        unique_key = f"knowledge-assets/{team.id}/{uuid.uuid4()}/{safe_filename}"
+        unique_key = f"knowledge-assets/{team_id}/{uuid.uuid4()}/{safe_filename}"
 
         try:
             loop = asyncio.get_event_loop()
@@ -118,7 +95,7 @@ class KnowledgeBaseService:
             file_type = file.content_type.split("/")[-1] if file.content_type else "pdf"
 
             asset = KnowledgeAsset(
-                team_id=team.id,
+                team_id=team_id,
                 title=title,
                 description=description,
                 tags=tags or [],
@@ -137,7 +114,7 @@ class KnowledgeBaseService:
             rag_service = KnowledgeBaseRAGService(self.db)
             asset = await rag_service.index_asset(asset, file_content)
 
-            logger.info(f"Asset {asset.id} uploaded successfully for team {team.id}")
+            logger.info(f"Asset {asset.id} uploaded successfully for team {team_id}")
             return asset
 
         except HTTPException:
@@ -156,11 +133,11 @@ class KnowledgeBaseService:
                 detail=f"Failed to upload file: {str(e)}",
             )
 
-    async def update_asset(self, asset_id: UUID, user_id: UUID,
+    async def update_asset(self, asset_id: UUID, team_id: UUID,
                             title: str | None = None,
                             description: str | None = None,
                             tags: list[str] | None = None):
-        asset = await self.get_asset(asset_id, user_id)
+        asset = await self.get_asset(asset_id, team_id)
         if title is not None:
             asset.title = title
         if description is not None:
@@ -170,12 +147,10 @@ class KnowledgeBaseService:
         await self.db.commit()
         await self.db.refresh(asset)
         self._attach_presigned(asset)
-        team = await self._get_user_team(user_id)
         return asset
 
-    async def delete_asset(self, asset_id: UUID, user_id: UUID):
-        asset = await self.get_asset(asset_id, user_id)
-        team = await self._get_user_team(user_id)
+    async def delete_asset(self, asset_id: UUID, team_id: UUID):
+        asset = await self.get_asset(asset_id, team_id)
 
         rag_service = KnowledgeBaseRAGService(self.db)
 

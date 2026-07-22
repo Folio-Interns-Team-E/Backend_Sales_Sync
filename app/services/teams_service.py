@@ -3,6 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 from uuid import UUID
+import logging
+import resend
 from app.models.user import User
 from app.models.team import Team
 from app.models.team_member import TeamMember, MemberRole
@@ -12,6 +14,9 @@ from app.schemas.teams import (
     TeamResponse, MemberResponse,
     UserTeamResponse, TeamUpdate
 )
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _build_team_response(team: Team) -> TeamResponse:
@@ -63,12 +68,6 @@ async def create_team(
     current_user: User,
     db: AsyncSession
 ):
-    if await _get_user_any_membership(current_user.id, db):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You are already part of a team"
-        )
-
     new_team = Team(name=payload.name)
     db.add(new_team)
     await db.flush()
@@ -108,6 +107,58 @@ async def get_team(
     return result
 
 
+async def _send_team_invite_email(
+    to_email: str,
+    team_name: str,
+    invite_code: str,
+    inviter_name: str
+):
+    frontend_url = settings.frontend_origins[0] if settings.frontend_origins else "http://localhost:5173"
+    invite_link = f"{frontend_url}/team-setup?invite={invite_code}"
+    
+    try:
+        resend.Emails.send({
+            "from": settings.FROM_EMAIL,
+            "to": [to_email],
+            "subject": f"You've been invited to join {team_name}",
+            "html": f"""
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <div style="background: linear-gradient(135deg, #0d1f2d, #1a9ea3); padding: 32px; text-align: center; border-radius: 12px 12px 0 0;">
+                    <h1 style="color: white; margin: 0; font-size: 24px;">Team Invitation</h1>
+                </div>
+                <div style="background: #f8fafc; padding: 32px; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 12px 12px;">
+                    <p style="color: #334155; font-size: 16px; line-height: 1.6;">
+                        <strong>{inviter_name}</strong> has invited you to join the team <strong>"{team_name}"</strong> on SalesSync AI.
+                    </p>
+                    <div style="text-align: center; margin: 32px 0;">
+                        <a href="{invite_link}" style="
+                            display: inline-block;
+                            background: #1a9ea3;
+                            color: white;
+                            text-decoration: none;
+                            padding: 14px 32px;
+                            border-radius: 8px;
+                            font-weight: bold;
+                            font-size: 16px;
+                        ">Accept Invitation</a>
+                    </div>
+                    <p style="color: #64748b; font-size: 14px; line-height: 1.6;">
+                        Or use this invite code: <strong style="color: #1a9ea3;">{invite_code}</strong>
+                    </p>
+                    <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+                    <p style="color: #94a3b8; font-size: 12px; text-align: center;">
+                        If you didn't expect this invitation, you can safely ignore this email.
+                    </p>
+                </div>
+            </div>
+            """,
+        })
+        logger.info("Team invite email sent to %s", to_email)
+    except Exception:
+        logger.exception("Failed to send team invite email to %s", to_email)
+        raise
+
+
 async def invite_member(
         payload: InviteRequest,
         current_user: User,
@@ -120,32 +171,21 @@ async def invite_member(
             detail="You are not part of a team"
         )
 
-    result = await db.execute(select(User).where(User.email == payload.email))
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User must register before they can be added to a team"
-        )
-
-    if await _get_user_any_membership(user.id, db):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User is already part of a team"
-        )
-
-    membership = TeamMember(
-        user_id=user.id,
-        team_id=inviter_membership.team_id,
-        role=MemberRole.rep
-    )
-    db.add(membership)
-    await db.commit()
-
     team = await _get_team_with_members(inviter_membership.team_id, db)
-    result = _build_team_response(team)
-    return result
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Team not found"
+        )
+
+    await _send_team_invite_email(
+        to_email=payload.email,
+        team_name=team.name,
+        invite_code=team.invite_code,
+        inviter_name=current_user.full_name
+    )
+
+    return _build_team_response(team)
 
 
 async def join_existing_team(
@@ -153,12 +193,6 @@ async def join_existing_team(
     current_user: User,
     db: AsyncSession
 ):
-    if await _get_user_any_membership(current_user.id, db):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You are already part of a team"
-        )
-
     result = await db.execute(
         select(Team).where(Team.invite_code == payload.invite_code)
     )
@@ -168,6 +202,13 @@ async def join_existing_team(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invalid invite code"
+        )
+
+    existing_membership = await _get_membership(current_user.id, team.id, db)
+    if existing_membership:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You are already a member of this team"
         )
 
     membership = TeamMember(

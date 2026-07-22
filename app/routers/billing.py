@@ -8,8 +8,7 @@ from app.config import settings
 from app.models.team import Team
 from app.models.subscription import  SubscriptionStatus, SubscriptionTier
 from app.services.billing_service import BillingService
-from app.middleware.auth_middleware import get_current_user
-from app.models.user import User
+from app.middleware.auth_middleware import get_team_context, TeamContext
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -73,27 +72,27 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 @router.post("/checkout/{tier}")
 async def create_checkout(
     tier: str,
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
     db: AsyncSession = Depends(get_db)
 ):
     service = BillingService(db)
-    url = await service.create_checkout_session(current_user.id, tier)
+    url = await service.create_checkout_session(team_ctx.team_id, tier)
     return {"checkout_url": url}
 
 
 @router.get("/status")
 async def subscription_status(
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
     db: AsyncSession = Depends(get_db)
 ):
     service = BillingService(db)
-    return await service.get_subscription_status(current_user.id)
+    return await service.get_subscription_status(team_ctx.team_id)
 
 
 @router.post("/cancel")
 async def cancel_subscription(
-    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
     db: AsyncSession = Depends(get_db)
 ):
     service = BillingService(db)
-    return await service.cancel_subscription(current_user.id)
+    return await service.cancel_subscription(team_ctx.team_id)
