@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.team_member import TeamMember, MemberRole
 from app.core.security import decode_access_token
+from typing import Optional
 
 bearer_scheme = HTTPBearer()
 
@@ -66,7 +67,7 @@ async def get_current_user(
 
 
 async def get_team_context(
-        x_team_id: str = Header(..., alias="X-Team-Id"),
+        x_team_id: Optional[str] = Header(None, alias="X-Team-Id"),
         current_user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
 ) -> TeamContext:

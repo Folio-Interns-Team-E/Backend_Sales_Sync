@@ -2,10 +2,9 @@ import logging
 from typing import Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, or_
+from sqlalchemy import select, desc
 from fastapi import HTTPException, status
 from app.models.proposal import Proposal, ProposalTemplate, ProposalStatus, ProposalOutcome
-from app.models.lead import Lead
 from app.core.s3 import generate_presigned_url, upload_to_s3 as s3_upload
 
 logger = logging.getLogger(__name__)
@@ -18,17 +17,14 @@ class ProposalService:
     async def list_proposals(self, team_id: UUID):
         query = (
             select(Proposal)
-            .outerjoin(Lead, Proposal.lead_id == Lead.id)
-            .where(
-                or_(
-                    Lead.team_id == team_id,
-                    Proposal.lead_id.is_(None)
-                )
-            )
+            .where(Proposal.team_id == team_id)
             .order_by(desc(Proposal.updated_at))
         )
         result = await self.db.execute(query)
         proposals = result.scalars().all()
+        for p in proposals:
+            if p.file_url and "amazonaws.com" in p.file_url:
+                p.presigned_url = generate_presigned_url(p.file_url)
         from app.schemas.proposals import ProposalResponse
         data = [ProposalResponse.model_validate(p).model_dump(mode="json") for p in proposals]
         return data
@@ -36,14 +32,7 @@ class ProposalService:
     async def get_proposal(self, proposal_id: UUID, team_id: UUID):
         result = await self.db.execute(
             select(Proposal)
-            .outerjoin(Lead, Proposal.lead_id == Lead.id)
-            .where(
-                Proposal.id == proposal_id,
-                or_(
-                    Lead.team_id == team_id,
-                    Proposal.lead_id.is_(None)
-                )
-            )
+            .where(Proposal.id == proposal_id, Proposal.team_id == team_id)
         )
         proposal = result.scalar_one_or_none()
         if not proposal:
@@ -59,6 +48,7 @@ class ProposalService:
                                template_id: Optional[UUID] = None,
                                ai_metadata: Optional[dict] = None):
         proposal = Proposal(
+            team_id=team_id,
             lead_id=lead_id,
             template_id=template_id,
             file_url=file_url,
@@ -169,6 +159,15 @@ class ProposalService:
             file_type=file_type,
             file_size=file_size,
         )
+
+    async def delete_template(self, team_id: UUID):
+        result = await self.db.execute(
+            select(ProposalTemplate).where(ProposalTemplate.team_id == team_id)
+        )
+        template = result.scalar_one_or_none()
+        if template:
+            await self.db.delete(template)
+            await self.db.commit()
 
     async def delete_proposal(self, proposal_id: UUID, team_id: UUID):
         proposal = await self.get_proposal(proposal_id, team_id)

@@ -154,6 +154,7 @@ class ChatService(ChatAgentsService):
         try:
             team = await self._get_team(team_id)
             chat = await self._get_chat(chat_id, team_id)
+            chat_uuid = chat.id
             icp = team.icp if team.icp else "No ICP available"
 
             supervisor = SupervisorAgent(self.db)
@@ -169,7 +170,7 @@ class ChatService(ChatAgentsService):
             # 2. Fetch the Last 5 Chat Messages for Context (Prior to storing new incoming)
             history_res = await self.db.execute(
                 select(ChatMessage)
-                .where(ChatMessage.chat_id == chat.id)
+                .where(ChatMessage.chat_id == chat_uuid)
                 .order_by(desc(ChatMessage.created_at))
                 .limit(5)
             )
@@ -186,7 +187,7 @@ class ChatService(ChatAgentsService):
 
             # 3. Save the Incoming User Message
             new_chat_msg = ChatMessage(
-                chat_id=chat.id,
+                chat_id=chat_uuid,
                 team_id=team.id,
                 user_id=user_id,
                 sent_by=ChatRole.USER.value,
@@ -507,6 +508,7 @@ class ChatService(ChatAgentsService):
 
                     proposal = Proposal(
                         id=uuid.uuid4(),
+                        team_id=team_id,
                         lead_id=lead_id,
                         file_url=file_url,
                         template_id=template_id,
@@ -582,7 +584,7 @@ class ChatService(ChatAgentsService):
                 )
 
             ai_msg = ChatMessage(
-                chat_id=chat.id,
+                chat_id=chat_uuid,
                 team_id=team.id,
                 user_id=user_id,
                 sent_by=ChatRole.AI.value,

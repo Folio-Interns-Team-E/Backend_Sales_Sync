@@ -25,7 +25,7 @@ class Proposal(Base):
     __tablename__ = "proposals"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-   
+    team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
     lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True)
 
     template_id = Column(
@@ -54,6 +54,7 @@ class Proposal(Base):
     ai_metadata = Column(JSONB, default={}, nullable=False)
 
     lead = relationship("Lead", back_populates="proposals")
+    team = relationship("Team", back_populates="proposals")
     version = Column(Integer, nullable=False, default=1)
     template = relationship("ProposalTemplate", back_populates="proposals")
 
