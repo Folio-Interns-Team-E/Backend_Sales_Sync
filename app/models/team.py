@@ -28,6 +28,10 @@ class Team(Base):
     
 
     stripe_customer_id = Column(String, nullable=True, unique=True)
+    stripe_subscription_id = Column(String, nullable=True, unique=True)
+    subscription_tier = Column(String, nullable=False, server_default="free")
+    subscription_status = Column(String, nullable=False, server_default="active")
+    subscription_ends_at = Column(DateTime(timezone=True), nullable=True)
     
     subscriptions = relationship("Subscription", back_populates="team", cascade="all, delete-orphan")
     invoices = relationship("Invoice", back_populates="team", cascade="all, delete-orphan")

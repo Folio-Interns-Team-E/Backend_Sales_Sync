@@ -15,6 +15,7 @@ from app.models.lead import Lead
 logger = logging.getLogger(__name__)
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 
 
@@ -23,13 +24,23 @@ async def exchange_authorization_code(code: str) -> dict:
         "code": code,
         "client_id": settings.google_client_id,
         "client_secret": settings.google_client_secret,
-        "redirect_uri": "http://localhost:8080/api/integrations/gmail/callback",
+        "redirect_uri": f"{settings.backend_url}/integrations/gmail/callback",
         "grant_type": "authorization_code",
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(GOOGLE_TOKEN_URL, data=payload)
         resp.raise_for_status()
         return resp.json()
+
+
+async def fetch_google_email(access_token: str) -> str:
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        resp.raise_for_status()
+        return resp.json().get("email", "")
 
 
 async def refresh_access_token(refresh_token: str) -> str:

@@ -42,13 +42,22 @@ class BillingService:
             team.stripe_customer_id = customer.id
             await self.db.commit()
         
+        # Extract the base origin
+        raw_origin = settings.frontend_origins[0] if settings.frontend_origins else "http://localhost:8000"
+
+        # Ensure it starts with http:// or https://
+        if not raw_origin.startswith(("http://", "https://")):
+            frontend_base = f"http://{raw_origin}"  # Or https:// depending on env
+        else:
+            frontend_base = raw_origin
+
         session = await stripe.checkout.Session.create_async(
             customer=team.stripe_customer_id,
             payment_method_types=["card"],
             line_items=[{"price": price_id, "quantity": 1}],
             mode="subscription",
-            success_url="http://localhost:8080/billing/success",
-            cancel_url="http://localhost:8080/billing/cancel",
+            success_url=f"{frontend_base}/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{frontend_base}/billing/cancel",
             metadata={"team_id": str(team.id), "tier": tier}
         )
         
@@ -67,15 +76,21 @@ class BillingService:
         )
         active_sub = result.scalars().first()
         
-        if not active_sub:
+        stripe_sub_id = active_sub.stripe_subscription_id if active_sub else team.stripe_subscription_id
+        if not stripe_sub_id:
             raise HTTPException(status_code=400, detail="No active subscription found to cancel")
         
         await stripe.Subscription.modify_async(
-            active_sub.stripe_subscription_id,
+            stripe_sub_id,
             cancel_at_period_end=True
         )
         
-        active_sub.cancel_at_period_end = True
+        if active_sub:
+            active_sub.cancel_at_period_end = True
+        
+        if not team.subscription_status or team.subscription_status == SubscriptionStatus.ACTIVE.value:
+            team.subscription_status = SubscriptionStatus.CANCELED.value
+        
         await self.db.commit()
         
         return {"message": "Subscription will cancel at end of billing period"}
@@ -90,17 +105,17 @@ class BillingService:
         )
         latest_sub = result.scalars().first()
         
-        if not latest_sub:
+        if latest_sub:
             return {
-                "tier": SubscriptionTier.FREE.value,
-                "status": SubscriptionStatus.ACTIVE.value,
-                "ends_at": None,
-                "cancel_at_period_end": False
+                "tier": latest_sub.tier,
+                "status": latest_sub.status,
+                "ends_at": latest_sub.current_period_end,
+                "cancel_at_period_end": latest_sub.cancel_at_period_end
             }
-            
+        
         return {
-            "tier": latest_sub.tier,
-            "status": latest_sub.status,
-            "ends_at": latest_sub.current_period_end,
-            "cancel_at_period_end": latest_sub.cancel_at_period_end
+            "tier": getattr(team, "subscription_tier", SubscriptionTier.FREE.value),
+            "status": getattr(team, "subscription_status", SubscriptionStatus.ACTIVE.value),
+            "ends_at": getattr(team, "subscription_ends_at", None),
+            "cancel_at_period_end": False
         }

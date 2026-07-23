@@ -8,6 +8,7 @@ from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome, Propo
 from app.models.knowledge_base import KnowledgeAsset, KnowledgeAssetChunk
 from app.models.chat import Chat, ChatMessage, ChatRole
 from app.models.google_credentials import GoogleCredentials
+from app.models.subscription import Subscription, Invoice, SubscriptionTier, SubscriptionStatus
 
 
 __all__ = [
@@ -32,4 +33,8 @@ __all__ = [
     "ChatMessage",
     "ChatRole",
     "GoogleCredentials",
+    "Subscription",
+    "Invoice",
+    "SubscriptionTier",
+    "SubscriptionStatus",
 ]

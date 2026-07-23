@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import RedirectResponse
@@ -10,7 +11,7 @@ from app.database import get_db
 from app.middleware.auth_middleware import get_current_user
 from app.models.user import User
 from app.models.google_credentials import GoogleCredentials
-from app.services.gmail_service import exchange_authorization_code
+from app.services.gmail_service import exchange_authorization_code, fetch_google_email
 from app.config import settings
 from app.schemas.common import ApiResponse
 from app.schemas.calcom import CalComIntegrationCreate, CalComIntegrationResponse
@@ -26,15 +27,14 @@ router = APIRouter(prefix="/integrations", tags=["integrations"])
 async def gmail_auth_url(current_user: User = Depends(get_current_user)):
     params = {
         "client_id": settings.google_client_id,
-        "redirect_uri": "http://localhost:8080/api/integrations/gmail/callback",
+        "redirect_uri": f"{settings.backend_url}/integrations/gmail/callback",
         "response_type": "code",
-        "scope": "https://www.googleapis.com/auth/gmail.send",
+        "scope": "https://www.googleapis.com/auth/gmail.send openid email",
         "access_type": "offline",
         "prompt": "consent",
         "state": str(current_user.id),
     }
-    query_string = "&".join(f"{k}={v}" for k, v in params.items())
-    url = f"https://accounts.google.com/o/oauth2/v2/auth?{query_string}"
+    url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     return {"success": True, "data": {"url": url}}
 
 
@@ -64,7 +64,8 @@ async def gmail_callback(
     if not refresh_token:
         raise HTTPException(status_code=400, detail="No refresh_token returned; ensure access_type=offline and prompt=consent")
 
-    google_email = token_data.get("email", "")
+    access_token = token_data.get("access_token", "")
+    google_email = await fetch_google_email(access_token) if access_token else ""
 
     result = await db.execute(
         select(GoogleCredentials).where(GoogleCredentials.user_id == user_id)

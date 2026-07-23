@@ -56,6 +56,7 @@ class LeadResponse(BaseModel):
             "score": int(obj.score) if obj.score else None,
             "status": obj.status if isinstance(obj.status, str) else obj.status.value,
             "reasoning": (obj.ai_context_data or {}).get("reasoning") if hasattr(obj, "ai_context_data") else None,
+            "evaluation_justification": (obj.ai_context_data or {}).get("evaluation_justification") if hasattr(obj, "ai_context_data") else None,
             "pool_origin_id": getattr(obj, "pool_origin_id", None),
             "created_at": obj.created_at,
             "updated_at": obj.updated_at,
@@ -73,6 +74,7 @@ class LeadListResponse(BaseModel):
     score: Optional[int] = None
     status: str
     reasoning: Optional[str] = None
+    evaluation_justification: Optional[str] = None
     pool_origin_id: Optional[UUID] = None
     created_at: datetime
 
@@ -90,6 +92,7 @@ class LeadListResponse(BaseModel):
             "score": int(obj.score) if obj.score else None,
             "status": obj.status if isinstance(obj.status, str) else obj.status.value,
             "reasoning": (obj.ai_context_data or {}).get("reasoning") if hasattr(obj, "ai_context_data") else None,
+            "evaluation_justification": (obj.ai_context_data or {}).get("evaluation_justification") if hasattr(obj, "ai_context_data") else None,
             "pool_origin_id": getattr(obj, "pool_origin_id", None),
             "created_at": obj.created_at,
         }

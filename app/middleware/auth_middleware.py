@@ -71,9 +71,14 @@ async def get_team_context(
         current_user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
 ) -> TeamContext:
+    if not x_team_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Team-Id header is required"
+        )
     try:
         team_uuid = UUID(x_team_id)
-    except ValueError:
+    except (ValueError, TypeError):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid team ID format"
