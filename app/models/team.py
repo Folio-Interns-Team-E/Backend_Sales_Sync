@@ -45,6 +45,7 @@ class Team(Base):
     knowledge_assets = relationship("KnowledgeAsset", back_populates="team")
     knowledge_asset_chunks = relationship("KnowledgeAssetChunk", back_populates="team", cascade="all, delete-orphan")
     chat_messages = relationship("ChatMessage", back_populates="team", cascade="all, delete-orphan")
+    chats = relationship("Chat", back_populates="team", cascade="all, delete-orphan")
 
     google_credentials = relationship("GoogleCredentials", back_populates="team", cascade="all, delete-orphan")
     calcom_integrations = relationship("CalComIntegration", back_populates="team", cascade="all, delete-orphan")

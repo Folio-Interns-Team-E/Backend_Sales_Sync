@@ -6,7 +6,7 @@ from app.models.email import Email, EmailStatus
 from app.models.meeting import Meeting, MeetingStatus
 from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome, ProposalTemplate
 from app.models.knowledge_base import KnowledgeAsset, KnowledgeAssetChunk
-from app.models.chat import ChatMessage, ChatRole
+from app.models.chat import Chat, ChatMessage, ChatRole
 from app.models.google_credentials import GoogleCredentials
 
 
@@ -28,6 +28,7 @@ __all__ = [
 
     "KnowledgeAsset",
     "KnowledgeAssetChunk",
+    "Chat",
     "ChatMessage",
     "ChatRole",
     "GoogleCredentials",
