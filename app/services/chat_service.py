@@ -550,7 +550,7 @@ class ChatService(ChatAgentsService):
                         f"--- Quality Assurance Report ---\n"
                         f"Quality Grade: {badge} ({evaluation_report.get('overall_score')}/10)\n"
                         f"Tone Check: {evaluation_report.get('human_authenticity', {}).get('analysis')}\n"
-                        f"Actionable Polish: {evaluation_report.get('feedback_and_corrections')}\n"
+                        
                     )
                 else:
                     rag_service = KnowledgeBaseRAGService(self.db)

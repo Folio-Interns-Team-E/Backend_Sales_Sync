@@ -86,7 +86,7 @@ class MeetingAgent:
             target_cancel_time_str = parsed_decision.get("target_cancel_time")
             return await self._execute_cancel(target_lead, target_cancel_time_str)
 
-        return "MeetingAgent encountered an unhandled operations routing path."
+        return "Calcom API Key exhausted."
 
     async def _compile_meeting_decision(self, user_prompt: str, leads_context: list) -> dict:
         """

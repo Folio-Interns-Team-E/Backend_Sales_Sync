@@ -15,7 +15,7 @@ class ICPAgent:
     """
 
     BASE_URL = "https://api.groq.com/openai/v1"
-    MODEL = "openai/gpt-oss-120b"
+    MODEL = "llama-3.3-70b-versatile"
 
     async def refine_icp(self, raw_input: str) -> str:
         """

@@ -125,5 +125,5 @@ Generated Proposal Copy:
                 "prompt_adherence": {"score": 7, "analysis": "Fallback evaluation generated due to system error."},
                 "pitch_effectiveness": {"score": 7, "analysis": "Fallback evaluation."},
                 "human_authenticity": {"score": 7, "detected_ai_isms": [], "analysis": "Fallback evaluation."},
-                "feedback_and_corrections": f"Evaluator encountered a processing error: {str(e)}. Document approved with fallback."
+                
             }
