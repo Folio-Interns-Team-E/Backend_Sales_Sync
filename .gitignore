@@ -35,6 +35,7 @@ ENV/
 .coverage
 htmlcov/
 .tox/
+test-results*.xml
 
 # alembic
 migrations/versions/*.pyc
