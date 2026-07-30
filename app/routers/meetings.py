@@ -40,7 +40,7 @@ async def create_meeting(
 ):
     service = MeetingService(db)
     meeting = await service.create_meeting(
-        team_ctx.team_id, current_user, payload.lead_id,
+    team_ctx.team_id, current_user.id, payload.lead_id,
     payload.date, payload.time, payload.timezone,
     payload.calendar_event_id, payload.agenda, payload.notes,
     )
