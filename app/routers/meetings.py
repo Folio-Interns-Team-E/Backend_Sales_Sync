@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from app.database import get_db
-from app.middleware.auth_middleware import get_team_context, TeamContext
+from app.middleware.auth_middleware import get_team_context, TeamContext, get_current_user
 from app.schemas.meetings import MeetingCreate, MeetingUpdate, MeetingResponse
 from app.schemas.common import ApiResponse
 from app.services.meetings_service import MeetingService
@@ -36,12 +36,13 @@ async def create_meeting(
     payload: MeetingCreate,
     db: AsyncSession = Depends(get_db),
     team_ctx: TeamContext = Depends(get_team_context),
+    current_user = Depends(get_current_user),
 ):
     service = MeetingService(db)
     meeting = await service.create_meeting(
-        team_ctx.team_id, payload.lead_id,
-        payload.date, payload.time, payload.timezone,
-        payload.calendar_event_id, payload.agenda, payload.notes,
+        team_ctx.team_id, current_user, payload.lead_id,
+    payload.date, payload.time, payload.timezone,
+    payload.calendar_event_id, payload.agenda, payload.notes,
     )
     return ApiResponse(success=True, message="Meeting created successfully", data=meeting)
 
