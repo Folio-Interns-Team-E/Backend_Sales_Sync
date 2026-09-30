@@ -1,5 +1,7 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import uuid4
+
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from app.config import settings
@@ -11,8 +13,7 @@ logging.getLogger("passlib").setLevel(logging.ERROR)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 #jwt config
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
 def ensure_bcrypt_password_size(password: str) -> None:
@@ -27,41 +28,87 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     ensure_bcrypt_password_size(plain_password)
     return pwd_context.verify(plain_password, hashed_password)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta]=None) -> str:
-    to_encode = data.copy()
+def _create_token(data: dict, token_type: str, expires_delta: timedelta) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        **data,
+        "type": token_type,
+        "jti": str(uuid4()),
+        "iat": now,
+        "nbf": now,
+        "exp": now + expires_delta,
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
-    expire = datetime.utcnow() + (
-        expires_delta if expires_delta 
-        else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    return _create_token(
+        data,
+        "access",
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
 
-    to_encode.update({"exp": expire})
-
-    return jwt.encode(to_encode, settings.jwt_secret, algorithm=ALGORITHM)
-
-def create_refresh_token(data: dict, expires_delta: Optional[timedelta]=None) -> str:
-    to_encode = data.copy()
-
-    expire = datetime.utcnow() + (
-        expires_delta if expires_delta 
-        else timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
+def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    return _create_token(
+        data,
+        "refresh",
+        expires_delta or timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES),
     )
 
-    to_encode.update({"exp": expire})
 
-    return jwt.encode(to_encode, settings.jwt_secret, algorithm=ALGORITHM)
-
-def decode_access_token(token: str) -> Optional[dict]:
+def _decode_token(token: str, expected_type: str) -> Optional[dict]:
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            audience=settings.jwt_audience,
+            issuer=settings.jwt_issuer,
+        )
+        if payload.get("type") != expected_type or not payload.get("jti"):
+            return None
         return payload
     except JWTError:
         return None
 
+def decode_access_token(token: str) -> Optional[dict]:
+    return _decode_token(token, "access")
 
-def decode_token_without_verification(token: str) -> Optional[dict]:
-    try:
-        # python-jose allows unverified decoding via options
-        return jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM], options={"verify_signature": False})
-    except JWTError:
-        return None
+
+def decode_refresh_token(token: str) -> Optional[dict]:
+    return _decode_token(token, "refresh")
+
+
+def token_is_revoked(payload: dict) -> bool:
+    from app.core.redis import get_redis
+
+    redis = get_redis()
+    jti = payload.get("jti")
+    if not redis or not jti:
+        return False
+    return bool(redis.get(f"blocklist:{jti}"))
+
+
+def revoke_token(payload: dict) -> bool:
+    from app.core.redis import get_redis
+
+    redis = get_redis()
+    jti = payload.get("jti")
+    expires_at = payload.get("exp")
+    if not jti or not expires_at:
+        return False
+    if not redis:
+        return True
+    ttl_seconds = int(expires_at - datetime.now(timezone.utc).timestamp())
+    if ttl_seconds <= 0:
+        return False
+    return bool(
+        redis.set(
+            f"blocklist:{jti}",
+            "revoked",
+            ex=ttl_seconds,
+            nx=True,
+        )
+    )

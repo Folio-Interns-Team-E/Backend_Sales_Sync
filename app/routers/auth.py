@@ -1,20 +1,48 @@
-from fastapi import APIRouter, Depends, status, Response, Cookie
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import BackgroundTasks
 from app.schemas.auth import OTPRequest, OTPVerifyRequest
 from app.schemas.common import ApiResponse
 from app.services.auth_service import request_otp_service, verify_otp_service
 from app.database import get_db
-from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, RegisterResponse, LoginResponse
-from app.schemas.common import ApiResponse
-from app.services.auth_service import register_user, login_user, logout_user
-from app.middleware.auth_middleware import get_current_user
-from app.core.redis import get_redis
-from app.core.security import decode_token_without_verification
-import time
+from app.schemas.auth import RegisterRequest, LoginRequest, RegisterResponse, LoginResponse
+from app.services.auth_service import register_user, login_user
+from app.models.user import User
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_access_token,
+    decode_refresh_token,
+    revoke_token,
+    token_is_revoked,
+)
+from app.config import settings
+from uuid import UUID
 
 #router init (auth grouping)
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.app_env != "development",
+        samesite="lax",
+        path="/auth",
+        max_age=7 * 24 * 60 * 60,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key="refresh_token",
+        path="/auth",
+        httponly=True,
+        samesite="lax",
+        secure=settings.app_env != "development",
+    )
 
 #register user endpoint
 @router.post("/register", response_model=ApiResponse[RegisterResponse], status_code=status.HTTP_201_CREATED)
@@ -26,10 +54,12 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 @router.post("/login", response_model=ApiResponse[LoginResponse])
 async def login(
     payload: LoginRequest,
+    request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db)
 ):
-    result, refresh_token = await login_user(payload, db)
+    client_ip = request.client.host if request.client else "unknown"
+    result, refresh_token = await login_user(payload, db, client_ip=client_ip)
 
     if result.needs_verification:
         return ApiResponse(
@@ -38,14 +68,7 @@ async def login(
             data=result
         )
 
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=True,       
-        samesite="lax",
-        max_age=7 * 24 * 60 * 60, 
-    )
+    _set_refresh_cookie(response, refresh_token)
 
     return ApiResponse(
         success=True,
@@ -53,27 +76,64 @@ async def login(
         data=result
     )
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(response: Response, refresh_token: str | None = Cookie(default=None)):
-    # Clear client cookie
-    response.delete_cookie(
-        key="refresh_token",
-        path="/auth/refresh",
-        httponly=True,
-        samesite="lax",
-        secure=True
+@router.post("/refresh", response_model=ApiResponse[LoginResponse])
+async def refresh_session(
+    response: Response,
+    refresh_token: str | None = Cookie(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    payload = decode_refresh_token(refresh_token) if refresh_token else None
+    if payload is None or token_is_revoked(payload) or not revoke_token(payload):
+        _clear_refresh_cookie(response)
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    try:
+        user_id = UUID(str(payload.get("sub")))
+    except (TypeError, ValueError):
+        _clear_refresh_cookie(response)
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None or not user.email_verified:
+        _clear_refresh_cookie(response)
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    access_token = create_access_token({"sub": str(user.id)})
+    rotated_refresh_token = create_refresh_token({"sub": str(user.id)})
+    _set_refresh_cookie(response, rotated_refresh_token)
+
+    return ApiResponse(
+        success=True,
+        message="Session refreshed",
+        data=LoginResponse(
+            access_token=access_token,
+            user_id=user.id,
+            full_name=user.full_name,
+            email=user.email,
+        ),
     )
 
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    response: Response,
+    refresh_token: str | None = Cookie(default=None),
+    authorization: str | None = Header(default=None),
+):
     if refresh_token:
-        redis = get_redis()
-        payload = decode_token_without_verification(refresh_token)
-        
-        if redis and payload and "exp" in payload:
-            ttl_seconds = int(payload["exp"] - time.time())
-            if ttl_seconds > 0:
-                redis.setex(f"blocklist:{refresh_token}", ttl_seconds, "revoked")
-                
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+        payload = decode_refresh_token(refresh_token)
+        if payload:
+            revoke_token(payload)
+
+    if authorization and authorization.lower().startswith("bearer "):
+        payload = decode_access_token(authorization[7:].strip())
+        if payload:
+            revoke_token(payload)
+
+    _clear_refresh_cookie(response)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.post("/otp/request", response_model=ApiResponse[dict])

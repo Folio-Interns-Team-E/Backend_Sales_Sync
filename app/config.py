@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     # jwt
     jwt_secret: str
     jwt_algorithm: str = "HS256"
+    jwt_issuer: str = "sales-sync-api"
+    jwt_audience: str = "sales-sync-web"
     
     # external apis
     grok_api_key: str = ""
@@ -57,5 +59,14 @@ class Settings(BaseSettings):
             "https://frontend-vrdj.vercel.app",
         ]
     )
+
+    @model_validator(mode="after")
+    def validate_production_security(self):
+        if self.app_env.lower() in {"production", "staging"}:
+            if len(self.jwt_secret) < 32 or self.jwt_secret == "change-this-in-production":
+                raise ValueError("JWT_SECRET must be a strong production secret")
+            if not self.upstash_redis_rest_url or not self.upstash_redis_rest_token:
+                raise ValueError("Redis is required for production session revocation")
+        return self
     
 settings = Settings()

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from app.database import get_db
 from app.models.user import User
 from app.models.team_member import TeamMember, MemberRole
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, token_is_revoked
 from typing import Optional
 
 bearer_scheme = HTTPBearer()
@@ -28,7 +28,7 @@ async def get_current_user(
 
     payload = decode_access_token(token)
 
-    if payload is None:
+    if payload is None or token_is_revoked(payload):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",

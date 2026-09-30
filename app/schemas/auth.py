@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 from uuid import UUID
 
 
@@ -28,15 +28,13 @@ class LoginRequest(BaseModel):
         return validate_bcrypt_password(password)
 
 class TokenResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     access_token: str #jwt token
     token_type: str = "bearer"
     user_id: UUID #primary key
     full_name: str
     email: EmailStr
-
-    class Config:
-        from_attributes = True
-
 
 class LoginResponse(BaseModel):
     needs_verification: bool = False
@@ -48,14 +46,12 @@ class LoginResponse(BaseModel):
 
 
 class RegisterResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     user_id: UUID
     full_name: str
     email: str
     needs_verification: bool = True
-
-    class Config:
-        from_attributes = True
-
 
 class OTPRequest(BaseModel):
     email: EmailStr

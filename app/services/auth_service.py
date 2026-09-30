@@ -10,8 +10,10 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-import random
+import hashlib
+import hmac
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from fastapi import BackgroundTasks
 from app.schemas.auth import OTPRequest, OTPVerifyRequest
@@ -26,6 +28,33 @@ resend.api_key = settings.RESEND_API_KEY
 logger = logging.getLogger(__name__)
 
 OTP_EXPIRY_SECONDS = 300
+OTP_MAX_ATTEMPTS = 5
+OTP_REQUEST_COOLDOWN_SECONDS = 60
+LOGIN_MAX_ATTEMPTS = 10
+LOGIN_ATTEMPT_WINDOW_SECONDS = 15 * 60
+DUMMY_PASSWORD_HASH = "$2b$12$rWwzGgt1Al3V6a79qCLsFuOO6.ljkwDjkCNiANyXzwg6aW.p07b1u"
+
+
+def _otp_digest(otp: str) -> str:
+    return hmac.new(
+        settings.jwt_secret.encode(),
+        otp.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _login_attempt_key(email: str, client_ip: str) -> str:
+    identity = f"{email.strip().lower()}:{client_ip}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()
+    return f"login_attempts:{digest}"
+
+
+def _record_failed_login(redis_client, key: str) -> None:
+    if not redis_client:
+        return
+    attempts = redis_client.incr(key)
+    if attempts == 1:
+        redis_client.expire(key, LOGIN_ATTEMPT_WINDOW_SECONDS)
 
 
 async def register_user(payload: RegisterRequest, db: AsyncSession) -> RegisterResponse:
@@ -86,7 +115,7 @@ async def register_user(payload: RegisterRequest, db: AsyncSession) -> RegisterR
     )
 
 
-async def login_user(payload: LoginRequest, db: AsyncSession):
+async def login_user(payload: LoginRequest, db: AsyncSession, client_ip: str = "unknown"):
     if not payload.email or not payload.email.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -107,19 +136,26 @@ async def login_user(payload: LoginRequest, db: AsyncSession):
             detail=str(exc),
         )
 
+    redis_client = get_redis()
+    attempt_key = _login_attempt_key(str(payload.email), client_ip)
+    if redis_client and int(redis_client.get(attempt_key) or 0) >= LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+        )
+
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
 
-    if not user:
+    password_matches = verify_password(
+        payload.password,
+        user.hashed_password if user else DUMMY_PASSWORD_HASH,
+    )
+    if not user or not password_matches:
+        _record_failed_login(redis_client, attempt_key)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No account found with this email. Please register first."
-        )
-
-    if not verify_password(payload.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect password. Please try again."
+            detail="Invalid email or password."
         )
 
     if not user.email_verified:
@@ -127,6 +163,9 @@ async def login_user(payload: LoginRequest, db: AsyncSession):
             needs_verification=True,
             email=user.email,
         ), None
+
+    if redis_client:
+        redis_client.delete(attempt_key)
 
     token = create_access_token({"sub": str(user.id)})
     refresh_token = create_refresh_token({"sub": str(user.id)})
@@ -181,7 +220,7 @@ async def send_otp_email(email: str, otp: str):
 
 
 def generate_six_digit_otp() -> str:
-    return f"{random.randint(100000, 999999)}"
+    return f"{secrets.randbelow(900000) + 100000}"
 
 
 async def request_otp_service(payload: OTPRequest, background_tasks: BackgroundTasks, db: AsyncSession):
@@ -192,20 +231,37 @@ async def request_otp_service(payload: OTPRequest, background_tasks: BackgroundT
             detail="Verification service is temporarily unavailable. Please try again later."
         )
 
+    redis_key = f"otp:{payload.email}"
+    attempts_key = f"otp_attempts:{payload.email}"
+    cooldown_key = f"otp_cooldown:{payload.email}"
+
+    try:
+        if redis_client.get(cooldown_key):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Please wait before requesting another verification code.",
+            )
+        redis_client.set(cooldown_key, "1", ex=OTP_REQUEST_COOLDOWN_SECONDS)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Redis cooldown check failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create verification session. Please try again.",
+        )
+
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
 
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No account found with this email."
-        )
+        return
 
     otp = generate_six_digit_otp()
-    redis_key = f"otp:{payload.email}"
 
     try:
-        redis_client.set(redis_key, otp, ex=OTP_EXPIRY_SECONDS)
+        redis_client.set(redis_key, _otp_digest(otp), ex=OTP_EXPIRY_SECONDS)
+        redis_client.delete(attempts_key)
     except Exception as e:
         logger.error(f"Redis set failed: {e}")
         raise HTTPException(
@@ -225,6 +281,7 @@ async def verify_otp_service(payload: OTPVerifyRequest, db: AsyncSession) -> boo
         )
 
     redis_key = f"otp:{payload.email}"
+    attempts_key = f"otp_attempts:{payload.email}"
 
     try:
         stored_otp = redis_client.get(redis_key)
@@ -241,7 +298,17 @@ async def verify_otp_service(payload: OTPVerifyRequest, db: AsyncSession) -> boo
             detail="Verification code has expired. Please request a new one."
         )
 
-    if stored_otp != payload.otp:
+    if not hmac.compare_digest(str(stored_otp), _otp_digest(payload.otp)):
+        attempts = redis_client.incr(attempts_key)
+        if attempts == 1:
+            redis_client.expire(attempts_key, OTP_EXPIRY_SECONDS)
+        if attempts >= OTP_MAX_ATTEMPTS:
+            redis_client.delete(redis_key)
+            redis_client.delete(attempts_key)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many invalid attempts. Request a new verification code.",
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid verification code. Please check and try again."
@@ -249,6 +316,7 @@ async def verify_otp_service(payload: OTPVerifyRequest, db: AsyncSession) -> boo
 
     try:
         redis_client.delete(redis_key)
+        redis_client.delete(attempts_key)
     except Exception as e:
         logger.warning(f"Failed to clear key {redis_key} post-verification: {e}")
 
