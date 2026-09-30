@@ -1,8 +1,10 @@
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=(".env", "backend/.env"))
+
     # database
     database_url: str
     
@@ -56,8 +58,4 @@ class Settings(BaseSettings):
         ]
     )
     
-    class Config:
-        env_file = (".env", "backend/.env")
-
-
 settings = Settings()

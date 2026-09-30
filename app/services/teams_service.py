@@ -19,7 +19,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def _build_team_response(team: Team) -> TeamResponse:
+def _build_team_response(team: Team, *, include_invite_code: bool = False) -> TeamResponse:
     members = []
     for tm in team.members:
         members.append(MemberResponse(
@@ -31,7 +31,7 @@ def _build_team_response(team: Team) -> TeamResponse:
     return TeamResponse(
         id=team.id,
         name=team.name,
-        invite_code=team.invite_code,
+        invite_code=team.invite_code if include_invite_code else None,
         created_at=team.created_at,
         members=members
     )
@@ -56,11 +56,18 @@ async def _get_membership(user_id: UUID, team_id: UUID, db: AsyncSession) -> Tea
     return result.scalar_one_or_none()
 
 
-async def _get_user_any_membership(user_id: UUID, db: AsyncSession) -> TeamMember | None:
-    result = await db.execute(
-        select(TeamMember).where(TeamMember.user_id == user_id)
-    )
-    return result.scalar_one_or_none()
+def _require_role(membership: TeamMember | None, *roles: MemberRole) -> TeamMember:
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this team",
+        )
+    if membership.role not in roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions for this team",
+        )
+    return membership
 
 
 async def create_team(
@@ -81,7 +88,7 @@ async def create_team(
     await db.commit()
 
     team = await _get_team_with_members(new_team.id, db)
-    result = _build_team_response(team)
+    result = _build_team_response(team, include_invite_code=True)
     return result
 
 
@@ -103,7 +110,10 @@ async def get_team(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Team not found"
         )
-    result = _build_team_response(team)
+    result = _build_team_response(
+        team,
+        include_invite_code=membership.role == MemberRole.admin,
+    )
     return result
 
 
@@ -160,18 +170,18 @@ async def _send_team_invite_email(
 
 
 async def invite_member(
+        team_id: UUID,
         payload: InviteRequest,
         current_user: User,
         db: AsyncSession
 ):
-    inviter_membership = await _get_user_any_membership(current_user.id, db)
-    if not inviter_membership:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You are not part of a team"
-        )
+    inviter_membership = _require_role(
+        await _get_membership(current_user.id, team_id, db),
+        MemberRole.admin,
+        MemberRole.manager,
+    )
 
-    team = await _get_team_with_members(inviter_membership.team_id, db)
+    team = await _get_team_with_members(team_id, db)
     if not team:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -185,7 +195,10 @@ async def invite_member(
         inviter_name=current_user.full_name
     )
 
-    return _build_team_response(team)
+    return _build_team_response(
+        team,
+        include_invite_code=inviter_membership.role == MemberRole.admin,
+    )
 
 
 async def join_existing_team(
@@ -231,12 +244,10 @@ async def update_member_role(
     current_user: User,
     db: AsyncSession
 ):
-    membership = await _get_membership(current_user.id, team_id, db)
-    if not membership:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this team"
-        )
+    _require_role(
+        await _get_membership(current_user.id, team_id, db),
+        MemberRole.admin,
+    )
 
     target = await _get_membership(user_id, team_id, db)
     if not target:
@@ -255,7 +266,7 @@ async def update_member_role(
     await db.commit()
 
     team = await _get_team_with_members(team_id, db)
-    result = _build_team_response(team)
+    result = _build_team_response(team, include_invite_code=True)
     return result
 
 
@@ -265,12 +276,11 @@ async def remove_member(
     current_user: User,
     db: AsyncSession
 ):
-    membership = await _get_membership(current_user.id, team_id, db)
-    if not membership:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this team"
-        )
+    membership = _require_role(
+        await _get_membership(current_user.id, team_id, db),
+        MemberRole.admin,
+        MemberRole.manager,
+    )
 
     target = await _get_membership(user_id, team_id, db)
     if not target:
@@ -289,7 +299,10 @@ async def remove_member(
     await db.commit()
 
     team = await _get_team_with_members(team_id, db)
-    result = _build_team_response(team)
+    result = _build_team_response(
+        team,
+        include_invite_code=membership.role == MemberRole.admin,
+    )
     return result
 
 
@@ -298,12 +311,10 @@ async def get_team_invite_code(
     current_user: User,
     db: AsyncSession
 ):
-    membership = await _get_membership(current_user.id, team_id, db)
-    if not membership:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this team"
-        )
+    _require_role(
+        await _get_membership(current_user.id, team_id, db),
+        MemberRole.admin,
+    )
 
     result = await db.execute(select(Team).where(Team.id == team_id))
     team = result.scalar_one_or_none()
@@ -331,12 +342,11 @@ async def update_team(
     current_user: User,
     db: AsyncSession
 ):
-    membership = await _get_membership(current_user.id, team_id, db)
-    if not membership:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this team"
-        )
+    membership = _require_role(
+        await _get_membership(current_user.id, team_id, db),
+        MemberRole.admin,
+        MemberRole.manager,
+    )
 
     result = await db.execute(select(Team).where(Team.id == team_id))
     team = result.scalar_one_or_none()
@@ -351,7 +361,10 @@ async def update_team(
     await db.commit()
 
     team = await _get_team_with_members(team_id, db)
-    return _build_team_response(team)
+    return _build_team_response(
+        team,
+        include_invite_code=membership.role == MemberRole.admin,
+    )
 
 
 async def delete_team(
@@ -359,18 +372,10 @@ async def delete_team(
     current_user: User,
     db: AsyncSession
 ):
-    membership = await _get_membership(current_user.id, team_id, db)
-    if not membership:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this team"
-        )
-
-    if membership.role != MemberRole.admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can delete the team"
-        )
+    _require_role(
+        await _get_membership(current_user.id, team_id, db),
+        MemberRole.admin,
+    )
 
     result = await db.execute(select(Team).where(Team.id == team_id))
     team = result.scalar_one_or_none()
@@ -396,7 +401,7 @@ async def get_user_teams(current_user: User, db: AsyncSession) -> list[UserTeamR
         UserTeamResponse(
             id=tm.team.id,
             name=tm.team.name,
-            invite_code=tm.team.invite_code,
+            invite_code=tm.team.invite_code if tm.role == MemberRole.admin else None,
             created_at=tm.team.created_at,
             role=tm.role,
         )

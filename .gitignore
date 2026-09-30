@@ -23,6 +23,11 @@ wheels/
 pip-wheel-metadata/
 .installed.cfg
 
+# test output
+.pytest_cache/
+.coverage
+htmlcov/
+
 # virtual environments
 venv/
 .venv/

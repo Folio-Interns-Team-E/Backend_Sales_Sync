@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from datetime import datetime, timezone
+from uuid import UUID
 import stripe
 
 from app.database import get_db
@@ -10,7 +11,8 @@ from app.config import settings
 from app.models.team import Team
 from app.models.subscription import Subscription, Invoice, SubscriptionStatus, SubscriptionTier
 from app.services.billing_service import BillingService
-from app.middleware.auth_middleware import get_team_context, TeamContext
+from app.middleware.auth_middleware import get_team_context, require_role, TeamContext
+from app.models.team_member import MemberRole
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -133,10 +135,23 @@ def to_clean_dict(obj):
     return dict(obj)
 
 
+def _validate_checkout_team(metadata_team_id: object, team_ctx: TeamContext) -> UUID:
+    try:
+        session_team_id = UUID(str(metadata_team_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid team_id in session metadata")
+    if session_team_id != team_ctx.team_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Stripe session does not belong to the active team",
+        )
+    return session_team_id
+
+
 @router.post("/checkout/complete")
 async def checkout_complete(
     body: CheckoutCompleteRequest,
-    team_ctx: TeamContext = Depends(get_team_context),
+    team_ctx: TeamContext = Depends(require_role(MemberRole.admin)),
     db: AsyncSession = Depends(get_db),
 ):
     # 1. Retrieve and normalize Session
@@ -159,6 +174,8 @@ async def checkout_complete(
         raise HTTPException(status_code=400, detail="Missing team_id in session metadata")
     if not tier:
         raise HTTPException(status_code=400, detail="Missing tier in session metadata")
+
+    team_id = _validate_checkout_team(team_id, team_ctx)
 
     stripe_subscription_id = session.get("subscription")
     if not stripe_subscription_id:
@@ -206,6 +223,9 @@ async def checkout_complete(
         select(Subscription).where(Subscription.stripe_subscription_id == stripe_subscription_id)
     )
     existing_sub = sub_result.scalar_one_or_none()
+
+    if existing_sub and existing_sub.team_id != team_id:
+        raise HTTPException(status_code=409, detail="Subscription belongs to another team")
 
     if existing_sub:
         existing_sub.tier = tier
@@ -260,7 +280,7 @@ async def checkout_complete(
 @router.post("/checkout/{tier}")
 async def create_checkout(
     tier: str,
-    team_ctx: TeamContext = Depends(get_team_context),
+    team_ctx: TeamContext = Depends(require_role(MemberRole.admin)),
     db: AsyncSession = Depends(get_db)
 ):
     service = BillingService(db)
@@ -279,7 +299,7 @@ async def subscription_status(
 
 @router.post("/cancel")
 async def cancel_subscription(
-    team_ctx: TeamContext = Depends(get_team_context),
+    team_ctx: TeamContext = Depends(require_role(MemberRole.admin)),
     db: AsyncSession = Depends(get_db)
 ):
     service = BillingService(db)

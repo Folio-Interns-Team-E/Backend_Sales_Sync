@@ -1,0 +1,33 @@
+name: Backend CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Verify imports
+        run: uv run python -c "import app.main"
+        env:
+          DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/app
+          JWT_SECRET: ci-only-secret
+          DB_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+      - name: Run security tests
+        run: uv run pytest -q
+        env:
+          DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/app
+          JWT_SECRET: ci-only-secret
+          DB_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=

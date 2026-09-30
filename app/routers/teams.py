@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from app.database import get_db
@@ -10,6 +10,14 @@ from app.models.team_member import MemberRole
 from app.models.user import User
 
 router = APIRouter(prefix="/teams", tags=["teams"])
+
+
+def _ensure_target_team(team_id: UUID, team_ctx) -> None:
+    if team_ctx.team_id != team_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Team-Id must match the team in the request path",
+        )
 
 #list user's teams
 @router.get("/", response_model=ApiResponse[list[UserTeamResponse]])
@@ -71,7 +79,7 @@ async def invite_user(
     _team_ctx = Depends(require_role(MemberRole.admin, MemberRole.manager)),
     db: AsyncSession = Depends(get_db)
 ):
-    team = await invite_member(payload, current_user, db)
+    team = await invite_member(_team_ctx.team_id, payload, current_user, db)
     return ApiResponse(success=True, message="Invite link sent successfully", data=team)
 
 #change member role
@@ -84,6 +92,7 @@ async def change_member_role(
     _team_ctx = Depends(require_role(MemberRole.admin)),
     db: AsyncSession = Depends(get_db)
 ):
+    _ensure_target_team(team_id, _team_ctx)
     team = await update_member_role(team_id, user_id, payload, current_user, db)
     return ApiResponse(success=True, message="Member role updated successfully", data=team)
 
@@ -96,6 +105,7 @@ async def remove_team_member(
     _team_ctx = Depends(require_role(MemberRole.admin, MemberRole.manager)),
     db: AsyncSession = Depends(get_db)
 ):
+    _ensure_target_team(team_id, _team_ctx)
     team = await remove_member(team_id, user_id, current_user, db)
     return ApiResponse(success=True, message="Member removed successfully", data=team)
 
@@ -117,5 +127,6 @@ async def get_invite_code(
     _team_ctx = Depends(require_role(MemberRole.admin)),
     db: AsyncSession = Depends(get_db)
 ):
+    _ensure_target_team(team_id, _team_ctx)
     invite_code = await get_team_invite_code(team_id, current_user, db)
     return ApiResponse(success=True, message="Invite code fetched successfully", data=invite_code)

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from uuid import UUID
 from datetime import datetime
 from app.models.team_member import MemberRole
@@ -25,32 +25,28 @@ class TeamUpdate(BaseModel):
 
 
 class MemberResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     full_name: str
     email: EmailStr
     role: MemberRole
 
-    class Config:
-        from_attributes = True
-
-
 class TeamResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     name: str
-    invite_code: str
+    invite_code: str | None = None
     created_at: datetime
-    members: list[MemberResponse] = []
-
-    class Config:
-        from_attributes = True
+    members: list[MemberResponse] = Field(default_factory=list)
 
 
 class UserTeamResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     name: str
-    invite_code: str
+    invite_code: str | None = None
     created_at: datetime
     role: MemberRole
-
-    class Config:
-        from_attributes = True
