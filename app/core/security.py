@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import uuid4
+import hashlib
+import hmac
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -15,6 +17,15 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 #jwt config
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
+
+def session_claims(user) -> dict:
+    # A password change invalidates every previously issued session.
+    version = hmac.new(settings.jwt_secret.encode(), user.hashed_password.encode(), hashlib.sha256).hexdigest()
+    return {"sub": str(user.id), "pwd": version}
+
+
+def session_matches_user(payload: dict, user) -> bool:
+    return hmac.compare_digest(str(payload.get("pwd", "")), session_claims(user)["pwd"])
 
 def ensure_bcrypt_password_size(password: str) -> None:
     if len(password.encode("utf-8")) > 72:

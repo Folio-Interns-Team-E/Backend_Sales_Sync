@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from uuid import UUID
 
 
@@ -6,6 +6,20 @@ def validate_bcrypt_password(password: str) -> str:
     if len(password.encode("utf-8")) > 72:
         raise ValueError("Password cannot be longer than 72 bytes.")
     return password
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
+    password: str = Field(min_length=8, max_length=72)
+
+    @field_validator("password")
+    @classmethod
+    def password_must_fit_bcrypt(cls, password: str) -> str:
+        return validate_bcrypt_password(password)
 
 
 class RegisterRequest(BaseModel):

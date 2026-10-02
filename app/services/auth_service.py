@@ -9,6 +9,7 @@ from app.core.security import (
     ensure_bcrypt_password_size,
     hash_password,
     verify_password,
+    session_claims,
 )
 import hashlib
 import hmac
@@ -102,7 +103,7 @@ async def register_user(payload: RegisterRequest, db: AsyncSession) -> RegisterR
     if redis_client:
         otp = generate_six_digit_otp()
         try:
-            redis_client.set(f"otp:{new_user.email}", otp, ex=OTP_EXPIRY_SECONDS)
+            redis_client.set(f"otp:{new_user.email}", _otp_digest(otp), ex=OTP_EXPIRY_SECONDS)
             await send_otp_email(new_user.email, otp)
         except Exception:
             logger.exception("Failed to send OTP after registration for %s", new_user.email)
@@ -167,8 +168,8 @@ async def login_user(payload: LoginRequest, db: AsyncSession, client_ip: str = "
     if redis_client:
         redis_client.delete(attempt_key)
 
-    token = create_access_token({"sub": str(user.id)})
-    refresh_token = create_refresh_token({"sub": str(user.id)})
+    token = create_access_token(session_claims(user))
+    refresh_token = create_refresh_token(session_claims(user))
 
     return LoginResponse(
         needs_verification=False,

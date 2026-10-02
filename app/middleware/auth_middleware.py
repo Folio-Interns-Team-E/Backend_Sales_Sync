@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from app.database import get_db
 from app.models.user import User
 from app.models.team_member import TeamMember, MemberRole
-from app.core.security import decode_access_token, token_is_revoked
+from app.core.security import decode_access_token, token_is_revoked, session_matches_user
 from typing import Optional
 
 bearer_scheme = HTTPBearer()
@@ -56,7 +56,7 @@ async def get_current_user(
     result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
 
-    if user is None:
+    if user is None or not user.email_verified or not session_matches_user(payload, user):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",

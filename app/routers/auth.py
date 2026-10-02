@@ -15,12 +15,30 @@ from app.core.security import (
     decode_refresh_token,
     revoke_token,
     token_is_revoked,
+    session_claims,
+    session_matches_user,
 )
 from app.config import settings
 from uuid import UUID
+from app.schemas.auth import PasswordResetRequest, PasswordResetConfirm
+from app.services.password_recovery import request_reset, confirm_reset
 
 #router init (auth grouping)
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post("/password/request", response_model=ApiResponse[dict])
+async def request_password_reset(payload: PasswordResetRequest, request: Request,
+                                 background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+    await request_reset(str(payload.email), request.client.host if request.client else "unknown", background_tasks, db)
+    return ApiResponse(success=True, message="If an account exists, a recovery code will be sent to your email.", data={})
+
+
+@router.post("/password/reset", response_model=ApiResponse[dict])
+async def reset_password(payload: PasswordResetConfirm, response: Response, db: AsyncSession = Depends(get_db)):
+    await confirm_reset(payload.token, payload.password, db)
+    _clear_refresh_cookie(response)
+    return ApiResponse(success=True, message="Password updated. Please log in again.", data={})
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
@@ -95,12 +113,12 @@ async def refresh_session(
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if user is None or not user.email_verified:
+    if user is None or not user.email_verified or not session_matches_user(payload, user):
         _clear_refresh_cookie(response)
         raise HTTPException(status_code=401, detail="Invalid or expired session")
 
-    access_token = create_access_token({"sub": str(user.id)})
-    rotated_refresh_token = create_refresh_token({"sub": str(user.id)})
+    access_token = create_access_token(session_claims(user))
+    rotated_refresh_token = create_refresh_token(session_claims(user))
     _set_refresh_cookie(response, rotated_refresh_token)
 
     return ApiResponse(
