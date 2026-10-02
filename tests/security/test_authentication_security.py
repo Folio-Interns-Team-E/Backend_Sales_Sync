@@ -52,10 +52,10 @@ def test_otp_is_stored_as_keyed_digest() -> None:
 
 async def test_logout_clears_refresh_cookie_at_matching_path() -> None:
     response = await logout(Response(), refresh_token=None, authorization=None)
-    set_cookie = response.headers["set-cookie"]
+    set_cookie = response.headers.getlist("set-cookie")[-1]
 
     assert "refresh_token=" in set_cookie
-    assert "Path=/auth" in set_cookie
+    assert "Path=/;" in set_cookie
     assert "Max-Age=0" in set_cookie
 
 

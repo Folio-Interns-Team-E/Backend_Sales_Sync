@@ -22,9 +22,10 @@ from app.config import settings
 from uuid import UUID
 from app.schemas.auth import PasswordResetRequest, PasswordResetConfirm
 from app.services.password_recovery import request_reset, confirm_reset
+from app.middleware.csrf import require_auth_request
 
 #router init (auth grouping)
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[Depends(require_auth_request)])
 
 
 @router.post("/password/request", response_model=ApiResponse[dict])
@@ -42,24 +43,27 @@ async def reset_password(payload: PasswordResetConfirm, response: Response, db: 
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    # Remove the old cookie so direct API requests cannot send duplicate values.
+    response.delete_cookie("refresh_token", path="/auth")
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=settings.app_env != "development",
-        samesite="lax",
-        path="/auth",
+        secure=settings.app_env.lower() != "development",
+        samesite=settings.refresh_cookie_samesite,
+        path="/",
         max_age=7 * 24 * 60 * 60,
     )
 
 
 def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie("refresh_token", path="/auth")
     response.delete_cookie(
         key="refresh_token",
-        path="/auth",
+        path="/",
         httponly=True,
-        samesite="lax",
-        secure=settings.app_env != "development",
+        samesite=settings.refresh_cookie_samesite,
+        secure=settings.app_env.lower() != "development",
     )
 
 #register user endpoint

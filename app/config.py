@@ -1,5 +1,6 @@
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Literal
 
 
 class Settings(BaseSettings):
@@ -13,6 +14,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_issuer: str = "sales-sync-api"
     jwt_audience: str = "sales-sync-web"
+    refresh_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     
     # external apis
     grok_api_key: str = ""
@@ -62,6 +64,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self):
+        if self.refresh_cookie_samesite == "none" and self.app_env.lower() == "development":
+            raise ValueError("SameSite=None requires HTTPS; use lax for local development")
         if self.app_env.lower() in {"production", "staging"}:
             if len(self.jwt_secret) < 32 or self.jwt_secret == "change-this-in-production":
                 raise ValueError("JWT_SECRET must be a strong production secret")
