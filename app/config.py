@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     backend_url: str = "http://localhost:8000"
 
     # upstash redis
+    redis_url: str = ""
     upstash_redis_rest_url: str = ""
     upstash_redis_rest_token: str = ""
 
@@ -69,7 +70,7 @@ class Settings(BaseSettings):
         if self.app_env.lower() in {"production", "staging"}:
             if len(self.jwt_secret) < 32 or self.jwt_secret == "change-this-in-production":
                 raise ValueError("JWT_SECRET must be a strong production secret")
-            if not self.upstash_redis_rest_url or not self.upstash_redis_rest_token:
+            if not self.redis_url and (not self.upstash_redis_rest_url or not self.upstash_redis_rest_token):
                 raise ValueError("Redis is required for production session revocation")
         return self
     
