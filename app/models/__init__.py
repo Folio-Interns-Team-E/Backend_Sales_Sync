@@ -1,4 +1,5 @@
 from app.models.user import User
+from app.models.oauth_identity import OAuthIdentity
 from app.models.team import Team
 from app.models.team_member import TeamMember, MemberRole
 from app.models.lead import Lead, LeadStatus

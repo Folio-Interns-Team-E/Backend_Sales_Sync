@@ -31,6 +31,12 @@ class Settings(BaseSettings):
 
     google_client_id: str = ""
     google_client_secret: str = ""
+    google_login_client_id: str = ""
+    google_login_client_secret: str = ""
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    oauth_public_base_url: str = "http://localhost:5173/api"
+    oauth_frontend_url: str = "http://localhost:5173"
 
     backend_url: str = "http://localhost:8000"
 
