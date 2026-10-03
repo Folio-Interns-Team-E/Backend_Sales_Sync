@@ -19,7 +19,7 @@ def user():
 
 
 def database(account):
-    return SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: account)), commit=AsyncMock())
+    return SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: account)), commit=AsyncMock(), add=Mock())
 
 
 async def test_recovery_stores_digest_and_expires_without_disclosing_account():
@@ -55,6 +55,10 @@ async def test_reset_invalidates_old_sessions_and_cannot_be_replayed():
             await confirm_reset("x" * 43, "another-password", db)
         assert error.value.status_code == 400
     db.commit.assert_awaited_once()
+    event = db.add.call_args.args[0]
+    assert event.user_id == account.id
+    assert event.action.value == "password_reset"
+    db.add.assert_called_once()
 
 
 async def test_reset_rejects_credential_issued_before_password_change():

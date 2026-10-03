@@ -19,6 +19,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import BackgroundTasks
 from app.schemas.auth import OTPRequest, OTPVerifyRequest
 from app.core.redis import get_redis
+from app.services.security_activity import record_security_event
+from app.models.security_event import SecurityAction
 
 import resend
 
@@ -170,6 +172,8 @@ async def login_user(payload: LoginRequest, db: AsyncSession, client_ip: str = "
 
     token = create_access_token(session_claims(user))
     refresh_token = create_refresh_token(session_claims(user))
+    record_security_event(db, user.id, SecurityAction.password_login)
+    await db.commit()
 
     return LoginResponse(
         needs_verification=False,

@@ -12,6 +12,8 @@ from app.config import settings
 from app.core.redis import get_redis
 from app.core.security import hash_password, session_claims, session_matches_user
 from app.models.user import User
+from app.services.security_activity import record_security_event
+from app.models.security_event import SecurityAction
 
 RESET_TTL = 15 * 60
 
@@ -68,4 +70,5 @@ async def confirm_reset(token: str, password: str, db):
     if user is None or not session_matches_user(claims, user):
         raise HTTPException(400, "Invalid or expired recovery code. Request a new code.")
     user.hashed_password = hash_password(password)
+    record_security_event(db, user.id, SecurityAction.password_reset)
     await db.commit()

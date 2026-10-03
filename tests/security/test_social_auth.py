@@ -64,8 +64,10 @@ async def test_existing_email_does_not_silently_link():
 
 async def test_linked_subject_signs_in_even_if_provider_email_changes():
     user = SimpleNamespace(id=uuid4(), email_verified=True)
-    db = SimpleNamespace(execute=AsyncMock(side_effect=[result(SimpleNamespace(user_id=user.id)), result(user)]))
+    db = SimpleNamespace(execute=AsyncMock(side_effect=[result(SimpleNamespace(user_id=user.id)), result(user)]), add=Mock(), commit=AsyncMock())
     assert await service.resolve_user(db, "github", "123", "changed@example.com", "Name") is user
+    assert db.add.call_args.args[0].action.value == "github_login"
+    db.commit.assert_awaited_once()
 
 
 async def test_authenticated_link_cannot_take_another_users_identity():
@@ -81,7 +83,8 @@ async def test_new_user_and_identity_are_created_together():
     user = await service.resolve_user(db, "google", "123", "person@example.com", "Person")
     assert user.email_verified is True
     assert user.email == "person@example.com"
-    assert db.add.call_count == 2
+    assert db.add.call_count == 3
+    assert db.add.call_args.args[0].action.value == "google_login"
     db.commit.assert_awaited_once()
 
 

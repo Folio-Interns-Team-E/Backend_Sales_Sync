@@ -7,6 +7,7 @@ from app.routers import auth, teams, onboarding, leads, emails, meetings, propos
 from app.database import engine, Base
 from app.config import settings
 from app.routers import social_auth
+from app.routers import security_activity
 from app.models import team, user
 
 app = FastAPI(
@@ -28,6 +29,7 @@ app.add_middleware(
 # routers
 app.include_router(auth.router)
 app.include_router(social_auth.router)
+app.include_router(security_activity.router)
 app.include_router(teams.router)
 app.include_router(onboarding.router)
 app.include_router(leads.router)

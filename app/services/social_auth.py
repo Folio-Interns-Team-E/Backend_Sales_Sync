@@ -17,6 +17,8 @@ from app.core.redis import get_redis
 from app.core.security import hash_password, session_claims, session_matches_user
 from app.models.user import User
 from app.models.oauth_identity import OAuthIdentity
+from app.services.security_activity import record_security_event
+from app.models.security_event import SecurityAction
 
 PROVIDERS = {
     "google": ("https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", "openid email profile"),
@@ -124,6 +126,8 @@ async def resolve_user(db, provider, subject, email, name, link=None):
         user = (await db.execute(select(User).where(User.id == identity.user_id))).scalar_one_or_none()
         if not user or not user.email_verified:
             raise HTTPException(401, "Account unavailable")
+        record_security_event(db, user.id, SecurityAction(provider + "_login"))
+        await db.commit()
         return user
     else:
         existing = (await db.execute(select(User).where(func.lower(User.email) == email.lower()))).scalar_one_or_none()
@@ -135,6 +139,7 @@ async def resolve_user(db, provider, subject, email, name, link=None):
         await db.flush()
     if not identity:
         db.add(OAuthIdentity(provider=provider, subject=subject, user_id=user.id))
+    record_security_event(db, user.id, SecurityAction(provider + ("_linked" if link else "_login")))
     try:
         await db.commit()
     except IntegrityError:
