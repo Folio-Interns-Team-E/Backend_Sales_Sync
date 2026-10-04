@@ -8,6 +8,7 @@ from app.database import engine, Base
 from app.config import settings
 from app.routers import social_auth
 from app.routers import security_activity
+from app.routers import health as health_router
 from app.models import team, user
 
 app = FastAPI(
@@ -30,6 +31,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(social_auth.router)
 app.include_router(security_activity.router)
+app.include_router(health_router.router)
 app.include_router(teams.router)
 app.include_router(onboarding.router)
 app.include_router(leads.router)
@@ -84,8 +86,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.on_event("startup")
 async def startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Production schema changes belong in the reviewed deployment process.
+    if settings.app_env.lower() in {"development", "test"}:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
 
 @app.get("/health")

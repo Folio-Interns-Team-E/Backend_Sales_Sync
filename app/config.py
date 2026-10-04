@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     # database
     database_url: str
+    database_ssl_mode: Literal["auto", "disable", "require", "verify-ca", "verify-full"] = "auto"
     
     # jwt
     jwt_secret: str

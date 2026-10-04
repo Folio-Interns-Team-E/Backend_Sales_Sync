@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
+from app.core.database_config import async_database_options
 
 
 # base class all models inherit from
@@ -9,10 +10,10 @@ class Base(DeclarativeBase):
 
 
 # async engine — handles the actual connection to PostgreSQL
-connect_args = {"ssl": "require"} if settings.app_env not in {"development", "test"} else {}
+database_url, connect_args = async_database_options(settings.database_url, settings.database_ssl_mode, settings.app_env)
 
 engine = create_async_engine(
-    settings.database_url,
+    database_url,
     echo=settings.app_env == "development",  # logs SQL queries in dev only
     pool_pre_ping=True,     # 🔥 FIX 1
     pool_recycle=300,  

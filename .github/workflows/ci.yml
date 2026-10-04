@@ -31,3 +31,5 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/app
           JWT_SECRET: ci-only-secret
           DB_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+      - name: Build production container
+        run: docker build --tag sales-sync-backend:ci .
