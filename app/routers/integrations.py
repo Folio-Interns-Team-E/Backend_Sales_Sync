@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
 
+def gmail_success_redirect_url() -> str:
+    """Return users to the canonical frontend, never a temporary CORS origin."""
+    return f"{settings.oauth_frontend_url.rstrip('/')}/settings?integration=success"
+
+
 @router.get("/gmail/auth-url")
 async def gmail_auth_url(current_user: User = Depends(get_current_user)):
     params = {
@@ -86,7 +91,7 @@ async def gmail_callback(
     await db.commit()
 
     return RedirectResponse(
-        url=f"{settings.frontend_origins[0]}/dashboard?integration=success",
+        url=gmail_success_redirect_url(),
         status_code=302,
     )
 
