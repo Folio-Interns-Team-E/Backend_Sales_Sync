@@ -261,6 +261,12 @@ class KnowledgeBaseRAGService:
         if not query:
             return []
 
+        # Knowledge-base search is optional. Normal chat must continue to work
+        # when a workspace has not configured a vector store yet.
+        if not settings.pinecone_api_key or not settings.pinecone_index_name:
+            logger.info("Skipping knowledge-base search because Pinecone is not configured")
+            return []
+
         namespace = str(team_id)
         pinecone_result = await self._pinecone_query(
             vector=self._embed_text(query),
@@ -336,7 +342,7 @@ Instructions:
 """
 
             payload = {
-                "model": "llama-3.3-70b-versatile",
+                "model": "openai/gpt-oss-120b",
                 "messages": [
                     {"role": "system", "content": "You are a grounded sales knowledge base assistant."},
                     {"role": "user", "content": prompt},

@@ -153,6 +153,7 @@ class ChatService(ChatAgentsService):
     async def send_message(self, user_id: UUID, team_id: UUID, chat_id: UUID, message: str):
         try:
             team = await self._get_team(team_id)
+            team_uuid = team.id
             chat = await self._get_chat(chat_id, team_id)
             chat_uuid = chat.id
             icp = team.icp if team.icp else "No ICP available"
@@ -585,7 +586,7 @@ class ChatService(ChatAgentsService):
 
             ai_msg = ChatMessage(
                 chat_id=chat_uuid,
-                team_id=team.id,
+                team_id=team_uuid,
                 user_id=user_id,
                 sent_by=ChatRole.AI.value,
                 content=final_response,
