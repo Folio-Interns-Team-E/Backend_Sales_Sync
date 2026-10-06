@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import HTTPException, status
+import asyncio
 from app.models.user import User
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, RegisterResponse, LoginResponse
 from app.core.security import (
@@ -16,7 +17,6 @@ import hmac
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from fastapi import BackgroundTasks
 from app.schemas.auth import OTPRequest, OTPVerifyRequest
 from app.core.redis import get_redis
 from app.services.security_activity import record_security_event
@@ -26,8 +26,6 @@ import resend
 
 from app.config import settings
 
-resend.api_key = settings.RESEND_API_KEY
-
 logger = logging.getLogger(__name__)
 
 OTP_EXPIRY_SECONDS = 300
@@ -36,6 +34,26 @@ OTP_REQUEST_COOLDOWN_SECONDS = 60
 LOGIN_MAX_ATTEMPTS = 10
 LOGIN_ATTEMPT_WINDOW_SECONDS = 15 * 60
 DUMMY_PASSWORD_HASH = "$2b$12$rWwzGgt1Al3V6a79qCLsFuOO6.ljkwDjkCNiANyXzwg6aW.p07b1u"
+
+
+class EmailDeliveryError(RuntimeError):
+    """Raised when a verification email cannot be accepted for delivery."""
+
+
+def _email_sender() -> str:
+    api_key = settings.RESEND_API_KEY.strip()
+    sender = settings.FROM_EMAIL.strip()
+    if not api_key or not sender or "\r" in sender or "\n" in sender:
+        raise EmailDeliveryError("Email delivery is not configured.")
+    resend.api_key = api_key
+    return sender
+
+
+def _verification_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Verification email could not be sent. Please try again later.",
+    )
 
 
 def _otp_digest(otp: str) -> str:
@@ -96,19 +114,34 @@ async def register_user(payload: RegisterRequest, db: AsyncSession) -> RegisterR
         hashed_password=hash_password(payload.password),
     )
 
-    db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
-
-    # Send OTP via Redis + Resend
     redis_client = get_redis()
-    if redis_client:
-        otp = generate_six_digit_otp()
+    if not redis_client:
+        raise _verification_unavailable()
+
+    otp_key = f"otp:{new_user.email}"
+    otp = generate_six_digit_otp()
+    db.add(new_user)
+    try:
+        await db.flush()
+        redis_client.set(otp_key, _otp_digest(otp), ex=OTP_EXPIRY_SECONDS)
+        await send_otp_email(new_user.email, otp)
+        await db.commit()
+        await db.refresh(new_user)
+    except EmailDeliveryError as exc:
+        await db.rollback()
         try:
-            redis_client.set(f"otp:{new_user.email}", _otp_digest(otp), ex=OTP_EXPIRY_SECONDS)
-            await send_otp_email(new_user.email, otp)
+            redis_client.delete(otp_key)
         except Exception:
-            logger.exception("Failed to send OTP after registration for %s", new_user.email)
+            logger.warning("Failed to clear an undelivered registration OTP")
+        raise _verification_unavailable() from exc
+    except Exception:
+        await db.rollback()
+        try:
+            redis_client.delete(otp_key)
+        except Exception:
+            logger.warning("Failed to clear a registration OTP after an error")
+        logger.exception("Failed to create a verified registration session")
+        raise _verification_unavailable()
 
     return RegisterResponse(
         user_id=new_user.id,
@@ -189,10 +222,12 @@ async def logout_user(current_user: User):
 
 
 async def send_otp_email(email: str, otp: str):
+    sender = _email_sender()
     try:
-        resend.Emails.send(
+        await asyncio.to_thread(
+            resend.Emails.send,
             {
-                "from": settings.FROM_EMAIL,
+                "from": sender,
                 "to": [email],
                 "subject": "Your Verification Code",
                 "html": f"""
@@ -218,17 +253,17 @@ async def send_otp_email(email: str, otp: str):
                 """,
             }
         )
-        logger.info("OTP email sent to %s", email)
-    except Exception:
-        logger.exception("Failed to send OTP email to %s", email)
-        raise
+        logger.info("Verification email accepted for delivery")
+    except Exception as exc:
+        logger.exception("Verification email delivery failed")
+        raise EmailDeliveryError("Verification email delivery failed.") from exc
 
 
 def generate_six_digit_otp() -> str:
     return f"{secrets.randbelow(900000) + 100000}"
 
 
-async def request_otp_service(payload: OTPRequest, background_tasks: BackgroundTasks, db: AsyncSession):
+async def request_otp_service(payload: OTPRequest, db: AsyncSession):
     redis_client = get_redis()
     if not redis_client:
         raise HTTPException(
@@ -274,7 +309,15 @@ async def request_otp_service(payload: OTPRequest, background_tasks: BackgroundT
             detail="Failed to create verification session. Please try again."
         )
 
-    background_tasks.add_task(send_otp_email, payload.email, otp)
+    try:
+        await send_otp_email(payload.email, otp)
+    except EmailDeliveryError as exc:
+        try:
+            redis_client.delete(redis_key)
+            redis_client.delete(cooldown_key)
+        except Exception:
+            logger.warning("Failed to clear an undelivered verification code")
+        raise _verification_unavailable() from exc
 
 
 async def verify_otp_service(payload: OTPVerifyRequest, db: AsyncSession) -> bool:

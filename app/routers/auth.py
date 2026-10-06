@@ -159,8 +159,8 @@ async def logout(
 
 
 @router.post("/otp/request", response_model=ApiResponse[dict])
-async def request_otp(payload: OTPRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
-    await request_otp_service(payload, background_tasks, db)
+async def request_otp(payload: OTPRequest, db: AsyncSession = Depends(get_db)):
+    await request_otp_service(payload, db)
     return ApiResponse(
         success=True, 
         message="Verification code sent to your email.", 

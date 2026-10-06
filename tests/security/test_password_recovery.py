@@ -11,7 +11,13 @@ from app.core.security import session_claims, session_matches_user, verify_passw
 from app.schemas.auth import PasswordResetConfirm
 from app.services.password_recovery import confirm_reset, request_reset, RESET_TTL
 from app.schemas.auth import RegisterRequest
-from app.services.auth_service import register_user, _otp_digest
+from app.services.auth_service import (
+    EmailDeliveryError,
+    _otp_digest,
+    register_user,
+    request_otp_service,
+    send_otp_email,
+)
 
 
 def user():
@@ -19,7 +25,14 @@ def user():
 
 
 def database(account):
-    return SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: account)), commit=AsyncMock(), add=Mock())
+    return SimpleNamespace(
+        execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: account)),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+        flush=AsyncMock(),
+        refresh=AsyncMock(),
+        add=Mock(),
+    )
 
 
 async def test_recovery_stores_digest_and_expires_without_disclosing_account():
@@ -109,3 +122,55 @@ async def test_registration_stores_verifiable_hashed_otp():
     code = send.call_args.args[1]
     assert redis.set.call_args.args[1] == _otp_digest(code)
     assert redis.set.call_args.args[1] != code
+
+
+async def test_registration_rolls_back_when_verification_email_fails():
+    db = database(None)
+    db.add = Mock(side_effect=lambda account: setattr(account, "id", uuid4()))
+    redis = Mock()
+    with (
+        patch("app.services.auth_service.get_redis", return_value=redis),
+        patch(
+            "app.services.auth_service.send_otp_email",
+            new_callable=AsyncMock,
+            side_effect=EmailDeliveryError("failed"),
+        ),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await register_user(
+                RegisterRequest(full_name="Test Person", email="person@example.com", password="password-123"),
+                db,
+            )
+    assert error.value.status_code == 503
+    db.commit.assert_not_awaited()
+    db.rollback.assert_awaited_once()
+    redis.delete.assert_called_once_with("otp:person@example.com")
+
+
+async def test_send_otp_requires_email_configuration():
+    with (
+        patch("app.services.auth_service.settings.RESEND_API_KEY", ""),
+        patch("app.services.auth_service.settings.FROM_EMAIL", ""),
+        patch("app.services.auth_service.resend.Emails.send") as send,
+    ):
+        with pytest.raises(EmailDeliveryError):
+            await send_otp_email("person@example.com", "123456")
+    send.assert_not_called()
+
+
+async def test_resend_failure_clears_code_and_cooldown():
+    account = user()
+    redis = Mock()
+    redis.get.return_value = None
+    with (
+        patch("app.services.auth_service.get_redis", return_value=redis),
+        patch(
+            "app.services.auth_service.send_otp_email",
+            new_callable=AsyncMock,
+            side_effect=EmailDeliveryError("failed"),
+        ),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await request_otp_service(SimpleNamespace(email=account.email), database(account))
+    assert error.value.status_code == 503
+    assert redis.delete.call_count == 3
