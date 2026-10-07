@@ -26,6 +26,10 @@ class LeadPatch(BaseModel):
     source: Optional[str] = None
 
 
+class LeadGenerateRequest(BaseModel):
+    limit: int = Field(default=10, ge=1, le=25)
+
+
 class LeadResponse(BaseModel):
     id: UUID
     team_id: UUID
@@ -97,3 +101,9 @@ class LeadListResponse(BaseModel):
             "created_at": obj.created_at,
         }
         return super().model_validate(data)
+
+
+class LeadGenerateResponse(BaseModel):
+    created: int
+    skipped_duplicates: int
+    leads: list[LeadListResponse]

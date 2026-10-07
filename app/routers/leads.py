@@ -4,11 +4,27 @@ from uuid import UUID
 from app.database import get_db
 from app.middleware.auth_middleware import get_current_user, get_team_context, TeamContext
 from app.models.user import User
-from app.schemas.leads import LeadCreate, LeadUpdate, LeadPatch, LeadResponse, LeadListResponse
+from app.schemas.leads import LeadCreate, LeadUpdate, LeadPatch, LeadResponse, LeadListResponse, LeadGenerateRequest, LeadGenerateResponse
 from app.schemas.common import ApiResponse
 from app.services.leads_service import LeadService
+from app.services.lead_generation_service import LeadGenerationService
 
 router = APIRouter(prefix="/leads", tags=["leads"])
+
+
+@router.post("/generate", response_model=ApiResponse[LeadGenerateResponse])
+async def generate_leads(
+    payload: LeadGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+    team_ctx: TeamContext = Depends(get_team_context),
+):
+    leads, skipped = await LeadGenerationService(db).generate(team_ctx.team_id, payload.limit)
+    data = LeadGenerateResponse(
+        created=len(leads),
+        skipped_duplicates=skipped,
+        leads=[LeadListResponse.model_validate(lead) for lead in leads],
+    )
+    return ApiResponse(success=True, message=f"Generated {len(leads)} Apollo leads", data=data)
 
 
 @router.get("/", response_model=ApiResponse[list[LeadListResponse]])
