@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     RESEND_API_KEY: str = ""
     FROM_EMAIL: str = ""
-    DB_ENCRYPTION_KEY: str = ""
+    db_encryption_key: str = ""
     
     # app
     app_env: str = "development"

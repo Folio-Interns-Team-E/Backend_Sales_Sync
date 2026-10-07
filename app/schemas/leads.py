@@ -114,3 +114,15 @@ class LeadImportResponse(BaseModel):
     skipped_duplicates: int
     invalid_rows: int
     leads: list[LeadListResponse]
+
+
+class LeadProviderUpdate(BaseModel):
+    api_key: str = Field(min_length=8, max_length=500)
+    monthly_limit: int = Field(default=100, ge=1, le=10000)
+
+
+class LeadProviderStatus(BaseModel):
+    provider: str
+    connected: bool
+    monthly_limit: int
+    used_this_month: int

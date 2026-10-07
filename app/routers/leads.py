@@ -4,13 +4,44 @@ from uuid import UUID
 from app.database import get_db
 from app.middleware.auth_middleware import get_current_user, get_team_context, TeamContext
 from app.models.user import User
-from app.schemas.leads import LeadCreate, LeadUpdate, LeadPatch, LeadResponse, LeadListResponse, LeadGenerateRequest, LeadGenerateResponse, LeadImportResponse
+from app.schemas.leads import LeadCreate, LeadUpdate, LeadPatch, LeadResponse, LeadListResponse, LeadGenerateRequest, LeadGenerateResponse, LeadImportResponse, LeadProviderUpdate, LeadProviderStatus
 from app.schemas.common import ApiResponse
 from app.services.leads_service import LeadService
 from app.services.lead_generation_service import LeadGenerationService
 from app.services.lead_import_service import LeadImportService
+from app.services.lead_provider_service import get_provider, reset_usage_if_needed, save_provider
+from app.models.team_member import MemberRole
 
 router = APIRouter(prefix="/leads", tags=["leads"])
+
+
+@router.get("/provider", response_model=ApiResponse[LeadProviderStatus])
+async def provider_status(db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    record = await get_provider(db, team_ctx.team_id)
+    if record:
+        reset_usage_if_needed(record)
+        await db.commit()
+    data = LeadProviderStatus(provider="apollo", connected=bool(record), monthly_limit=record.monthly_limit if record else 100, used_this_month=record.used_this_month if record else 0)
+    return ApiResponse(success=True, message="Lead provider status", data=data)
+
+
+@router.put("/provider", response_model=ApiResponse[LeadProviderStatus])
+async def configure_provider(payload: LeadProviderUpdate, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    if team_ctx.role not in {MemberRole.admin, MemberRole.manager}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can configure lead providers")
+    record = await save_provider(db, team_ctx.team_id, payload.api_key, payload.monthly_limit)
+    return ApiResponse(success=True, message="Apollo credentials saved securely", data=LeadProviderStatus(provider="apollo", connected=True, monthly_limit=record.monthly_limit, used_this_month=record.used_this_month))
+
+
+@router.delete("/provider", response_model=ApiResponse[dict])
+async def disconnect_provider(db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    if team_ctx.role not in {MemberRole.admin, MemberRole.manager}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can configure lead providers")
+    record = await get_provider(db, team_ctx.team_id)
+    if record:
+        await db.delete(record)
+        await db.commit()
+    return ApiResponse(success=True, message="Apollo disconnected", data={})
 
 
 @router.post("/generate", response_model=ApiResponse[LeadGenerateResponse])

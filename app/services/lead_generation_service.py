@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.lead import Lead, LeadStatus
 from app.models.team import Team
+from app.services.lead_provider_service import get_provider, provider_key, reset_usage_if_needed
 
 
 logger = logging.getLogger(__name__)
@@ -64,8 +65,9 @@ ICP:\n{icp}""",
             "keywords": str(result.get("keywords", ""))[:200],
         }
 
-    async def _search_apollo(self, criteria: dict[str, Any], limit: int) -> list[dict[str, Any]]:
-        if not settings.apollo_api_key:
+    async def _search_apollo(self, criteria: dict[str, Any], limit: int, api_key: str | None = None) -> list[dict[str, Any]]:
+        api_key = api_key or settings.apollo_api_key
+        if not api_key:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Apollo lead generation is not configured")
         params: list[tuple[str, str | int | bool]] = [("page", 1), ("per_page", limit), ("include_similar_titles", True)]
         params.extend(("person_titles[]", value) for value in criteria["titles"])
@@ -77,7 +79,7 @@ ICP:\n{icp}""",
             response = await client.post(
                 f"{self.APOLLO_BASE_URL}/mixed_people/api_search",
                 params=params,
-                headers={"x-api-key": settings.apollo_api_key, "Accept": "application/json"},
+                headers={"x-api-key": api_key, "Accept": "application/json"},
             )
         try:
             return list(self._json_content(response).get("people") or [])
@@ -85,7 +87,7 @@ ICP:\n{icp}""",
             logger.warning("Apollo people search failed with status %s", exc.response.status_code)
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Apollo could not complete the lead search") from exc
 
-    async def _enrich_person(self, person: dict[str, Any]) -> dict[str, Any] | None:
+    async def _enrich_person(self, person: dict[str, Any], api_key: str) -> dict[str, Any] | None:
         person_id = person.get("id") or person.get("person_id")
         if not person_id:
             return None
@@ -93,7 +95,7 @@ ICP:\n{icp}""",
             response = await client.post(
                 f"{self.APOLLO_BASE_URL}/people/match",
                 params={"id": person_id},
-                headers={"x-api-key": settings.apollo_api_key, "Accept": "application/json"},
+                headers={"x-api-key": api_key, "Accept": "application/json"},
             )
         if response.status_code != 200:
             logger.info("Skipping Apollo prospect that could not be enriched")
@@ -137,16 +139,33 @@ ICP:\n{icp}\nProspects:\n{json.dumps(compact)}""",
         if not team or not team.icp or not team.icp.strip():
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Complete your ICP before generating leads")
 
+        provider = await get_provider(self.db, team_id)
+        if provider:
+            reset_usage_if_needed(provider)
+            remaining = provider.monthly_limit - provider.used_this_month
+            if remaining <= 0:
+                await self.db.commit()
+                raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "This workspace has reached its monthly Apollo limit")
+            limit = min(limit, remaining)
+            api_key = provider_key(provider)
+        else:
+            api_key = settings.apollo_api_key
+        if not api_key:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Connect Apollo in Settings before generating leads")
+
         criteria = await self._criteria_from_icp(team.icp)
-        people = await self._search_apollo(criteria, limit)
+        people = await self._search_apollo(criteria, limit, api_key)
+        if provider:
+            provider.used_this_month += len(people)
         semaphore = asyncio.Semaphore(3)
 
         async def enrich(person):
             async with semaphore:
-                return await self._enrich_person(person)
+                return await self._enrich_person(person, api_key)
 
         prospects = [item for item in await asyncio.gather(*(enrich(person) for person in people)) if item]
         if not prospects:
+            await self.db.commit()
             return [], len(people)
 
         emails = [item["email"] for item in prospects]
@@ -160,6 +179,7 @@ ICP:\n{icp}\nProspects:\n{json.dumps(compact)}""",
                 seen.add(prospect["email"])
                 unique.append(prospect)
         if not unique:
+            await self.db.commit()
             return [], len(prospects)
 
         scores = await self._score(team.icp, unique)

@@ -41,6 +41,8 @@ async def test_generation_deduplicates_existing_and_batch_results():
         {"apollo_id": "3", "name": "Duplicate", "email": "new@example.com", "title": "Director", "company": "B", "country": None, "city": None, "linkedin_url": None, "raw": {}},
     ]
     with (
+        patch("app.services.lead_generation_service.get_provider", new=AsyncMock(return_value=None)),
+        patch("app.services.lead_generation_service.settings.apollo_api_key", "platform-key"),
         patch.object(service, "_criteria_from_icp", new=AsyncMock(return_value={})),
         patch.object(service, "_search_apollo", new=AsyncMock(return_value=[{"id": "1"}, {"id": "2"}, {"id": "3"}])),
         patch.object(service, "_enrich_person", new=AsyncMock(side_effect=prospects)),
