@@ -54,12 +54,25 @@ def result(value):
     return SimpleNamespace(scalar_one_or_none=lambda: value)
 
 
-async def test_existing_email_does_not_silently_link():
-    db = SimpleNamespace(execute=AsyncMock(side_effect=[result(None), result(SimpleNamespace(id=uuid4()))]), add=Mock())
-    with pytest.raises(HTTPException) as exc:
-        await service.resolve_user(db, "google", "subject", "existing@example.com", "Name")
-    assert exc.value.status_code == 409
-    db.add.assert_not_called()
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_verified_provider_email_links_existing_account(provider):
+    user = SimpleNamespace(id=uuid4(), email="existing@example.com", email_verified=False)
+    db = SimpleNamespace(
+        execute=AsyncMock(side_effect=[result(None), result(user)]),
+        add=Mock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+
+    assert await service.resolve_user(db, provider, "subject", user.email, "Name") is user
+    assert user.email_verified is True
+    identity = db.add.call_args_list[0].args[0]
+    assert identity.provider == provider
+    assert identity.subject == "subject"
+    assert identity.user_id == user.id
+    event = db.add.call_args_list[1].args[0]
+    assert event.action.value == f"{provider}_linked"
+    db.commit.assert_awaited_once()
 
 
 async def test_linked_subject_signs_in_even_if_provider_email_changes():

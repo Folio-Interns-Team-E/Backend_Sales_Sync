@@ -114,6 +114,7 @@ async def provider_profile(provider, code, verifier):
 
 
 async def resolve_user(db, provider, subject, email, name, link=None):
+    linked_existing = False
     identity = (await db.execute(select(OAuthIdentity).where(
         OAuthIdentity.provider == provider, OAuthIdentity.subject == subject))).scalar_one_or_none()
     if link:
@@ -132,14 +133,20 @@ async def resolve_user(db, provider, subject, email, name, link=None):
     else:
         existing = (await db.execute(select(User).where(func.lower(User.email) == email.lower()))).scalar_one_or_none()
         if existing:
-            # Email equality alone must never link a provider to an existing account.
-            raise HTTPException(409, "Sign in with your existing method, then link this provider in Settings.")
-        user = User(full_name=name, email=email, email_verified=True, hashed_password=hash_password(secrets.token_urlsafe(32)))
-        db.add(user)
-        await db.flush()
+            # provider_profile only returns an address after the provider has
+            # verified it. Attach that stable provider subject to the existing
+            # account so password users can adopt social sign-in safely.
+            user = existing
+            user.email_verified = True
+            linked_existing = True
+        else:
+            user = User(full_name=name, email=email, email_verified=True, hashed_password=hash_password(secrets.token_urlsafe(32)))
+            db.add(user)
+            await db.flush()
     if not identity:
         db.add(OAuthIdentity(provider=provider, subject=subject, user_id=user.id))
-    record_security_event(db, user.id, SecurityAction(provider + ("_linked" if link else "_login")))
+    action_suffix = "_linked" if link or linked_existing else "_login"
+    record_security_event(db, user.id, SecurityAction(provider + action_suffix))
     try:
         await db.commit()
     except IntegrityError:
