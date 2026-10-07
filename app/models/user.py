@@ -24,5 +24,5 @@ class User(Base):
     )
     chat_messages = relationship("ChatMessage", back_populates="user", cascade="all, delete-orphan")
     google_credentials = relationship("GoogleCredentials", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    calcom_integration = relationship("CalComIntegration", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    calcom_integrations = relationship("CalComIntegration", back_populates="user", cascade="all, delete-orphan")
 

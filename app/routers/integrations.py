@@ -8,14 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from app.database import get_db
-from app.middleware.auth_middleware import get_current_user
+from app.middleware.auth_middleware import get_current_user, get_team_context, TeamContext
+from app.models.team_member import MemberRole
 from app.models.user import User
 from app.models.google_credentials import GoogleCredentials
 from app.services.gmail_service import exchange_authorization_code, fetch_google_email
 from app.config import settings
 from app.schemas.common import ApiResponse
-from app.schemas.calcom import CalComIntegrationCreate, CalComIntegrationResponse
-from app.services.calcom_service import save_or_update_calcom, get_calcom_credentials
+from app.schemas.calcom import CalComIntegrationCreate, CalComIntegrationResponse, CalComStatus
+from app.services.calcom_service import save_or_update_calcom, get_calcom_integration
 
 
 logger = logging.getLogger(__name__)
@@ -115,20 +116,25 @@ async def gmail_status(
 
 
 
-@router.post("/calcom", response_model=ApiResponse[CalComIntegrationResponse], status_code=status.HTTP_200_OK)
+@router.get("/calcom/status", response_model=ApiResponse[CalComStatus])
+async def calcom_status(db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    integration = await get_calcom_integration(db, team_ctx.team_id)
+    return ApiResponse(success=True, message="Cal.com status", data=CalComStatus(connected=integration is not None, event_type_id=integration.event_type_id if integration else None))
+
+
+@router.put("/calcom", response_model=ApiResponse[CalComIntegrationResponse], status_code=status.HTTP_200_OK)
 async def save_integration(
     payload: CalComIntegrationCreate,
     db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
 ):
     """
     Saves or updates the authenticated user's Cal.com integration configurations.
     """
-    integration = await save_or_update_calcom(
-        db=db, 
-        user_id=current_user.id, 
-        payload=payload
-    )
+    if team_ctx.role not in {MemberRole.admin, MemberRole.manager}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can configure Cal.com")
+    integration = await save_or_update_calcom(db, team_ctx.team_id, current_user.id, payload.cal_api_key, payload.cal_event_type_id)
     
     # Map the model instance cleanly to our safe response schema
     response_data = CalComIntegrationResponse.model_validate(integration)
@@ -138,3 +144,14 @@ async def save_integration(
         message="Cal.com integration configured successfully.",
         data=response_data
     )
+
+
+@router.delete("/calcom", response_model=ApiResponse[dict])
+async def disconnect_calcom(db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    if team_ctx.role not in {MemberRole.admin, MemberRole.manager}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can configure Cal.com")
+    integration = await get_calcom_integration(db, team_ctx.team_id)
+    if integration:
+        await db.delete(integration)
+        await db.commit()
+    return ApiResponse(success=True, message="Cal.com disconnected", data={})

@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.email import Email, EmailStatus
+from app.models.calcom_credentials import CalComIntegration
 from app.models.google_credentials import GoogleCredentials
 from app.models.knowledge_base import KnowledgeAsset
 from app.models.lead import Lead
@@ -79,6 +80,9 @@ class AdminDashboardService:
         gmail_connected = await self._count(select(func.count()).select_from(GoogleCredentials).where(
             GoogleCredentials.team_id == team_id
         )) > 0
+        calcom_connected = await self._count(select(func.count()).select_from(CalComIntegration).where(
+            CalComIntegration.team_id == team_id
+        )) > 0
 
         recent_leads = (await self.db.execute(
             select(Lead).where(Lead.team_id == team_id).order_by(Lead.created_at.desc()).limit(5)
@@ -128,6 +132,7 @@ class AdminDashboardService:
             "knowledge_base": {"total": sum(knowledge_by_status.values()), "by_status": knowledge_by_status},
             "integrations": {
                 "gmail_connected": gmail_connected,
+                "calcom_connected": calcom_connected,
                 "apollo_connected": provider is not None,
                 "apollo_used": provider.used_this_month if provider else 0,
                 "apollo_limit": provider.monthly_limit if provider else 0,

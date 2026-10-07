@@ -156,7 +156,7 @@ class MeetingAgent:
 
         try:
             start_time_dt = datetime.fromisoformat(start_time_str)
-            cal_service = CalComService(self.db)
+            cal_service = CalComService(self.db, lead.team_id)
 
             await cal_service.create_booking(
                 lead_id=lead.id,
@@ -234,7 +234,7 @@ class MeetingAgent:
 
         # 4. Perform cancellation
         try:
-            cal_service = CalComService(self.db)
+            cal_service = CalComService(self.db, lead.team_id)
             await cal_service.cancel_booking(
                 booking_uid=active_meeting.calendar_event_id,
                 meeting_id=active_meeting.id

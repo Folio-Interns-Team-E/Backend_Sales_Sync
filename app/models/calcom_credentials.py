@@ -9,7 +9,7 @@ class CalComIntegration(Base):
     __tablename__ = "calcom_integrations"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     
     # Store API key encrypted. Event type ID can be plain string/int.
     encrypted_api_key = Column(String, nullable=False)
@@ -21,11 +21,11 @@ class CalComIntegration(Base):
     team_id = Column(
         UUID(as_uuid=True),
         ForeignKey("teams.id", ondelete="CASCADE"),
-        nullable=True,  # Kept nullable for now
+        nullable=False,
+        unique=True,
         index=True,
     )
 
     # Relationship back to the User
-    user = relationship("User", back_populates="calcom_integration")
+    user = relationship("User", back_populates="calcom_integrations")
     team = relationship("Team", back_populates="calcom_integrations")
-    
