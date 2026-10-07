@@ -107,3 +107,10 @@ class LeadGenerateResponse(BaseModel):
     created: int
     skipped_duplicates: int
     leads: list[LeadListResponse]
+
+
+class LeadImportResponse(BaseModel):
+    created: int
+    skipped_duplicates: int
+    invalid_rows: int
+    leads: list[LeadListResponse]

@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from app.database import get_db
 from app.middleware.auth_middleware import get_current_user, get_team_context, TeamContext
 from app.models.user import User
-from app.schemas.leads import LeadCreate, LeadUpdate, LeadPatch, LeadResponse, LeadListResponse, LeadGenerateRequest, LeadGenerateResponse
+from app.schemas.leads import LeadCreate, LeadUpdate, LeadPatch, LeadResponse, LeadListResponse, LeadGenerateRequest, LeadGenerateResponse, LeadImportResponse
 from app.schemas.common import ApiResponse
 from app.services.leads_service import LeadService
 from app.services.lead_generation_service import LeadGenerationService
+from app.services.lead_import_service import LeadImportService
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -25,6 +26,24 @@ async def generate_leads(
         leads=[LeadListResponse.model_validate(lead) for lead in leads],
     )
     return ApiResponse(success=True, message=f"Generated {len(leads)} Apollo leads", data=data)
+
+
+@router.post("/import", response_model=ApiResponse[LeadImportResponse])
+async def import_leads(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    team_ctx: TeamContext = Depends(get_team_context),
+):
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload a CSV file")
+    leads, duplicates, invalid = await LeadImportService(db).import_csv(team_ctx.team_id, await file.read())
+    data = LeadImportResponse(
+        created=len(leads),
+        skipped_duplicates=duplicates,
+        invalid_rows=invalid,
+        leads=[LeadListResponse.model_validate(lead) for lead in leads],
+    )
+    return ApiResponse(success=True, message=f"Imported {len(leads)} leads", data=data)
 
 
 @router.get("/", response_model=ApiResponse[list[LeadListResponse]])
