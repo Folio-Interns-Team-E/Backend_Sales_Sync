@@ -29,6 +29,8 @@ class Settings(BaseSettings):
 
     cal_api_key: str = ""
     cal_event_type_id: str = ""
+    cal_oauth_client_id: str = ""
+    cal_oauth_client_secret: str = ""
 
     google_client_id: str = ""
     google_client_secret: str = ""

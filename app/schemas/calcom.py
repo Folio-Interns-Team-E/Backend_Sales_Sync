@@ -20,3 +20,8 @@ class CalComIntegrationResponse(BaseModel):
 class CalComStatus(BaseModel):
     connected: bool
     event_type_id: Optional[str] = None
+    needs_event_type: bool = False
+
+
+class CalComEventTypeUpdate(BaseModel):
+    event_type_id: str = Field(..., min_length=1, max_length=32)
