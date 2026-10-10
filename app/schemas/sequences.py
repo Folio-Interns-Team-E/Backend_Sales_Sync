@@ -27,6 +27,35 @@ class EnrollmentInput(BaseModel):
     lead_ids: list[UUID] = Field(min_length=1, max_length=500)
 
 
+class RestartEnrollmentInput(BaseModel):
+    allow_replied: bool = False
+
+
+class DeliveryResponse(BaseModel):
+    id: UUID
+    status: str
+    attempt_count: int
+    error: str | None = None
+    sent_at: datetime | None = None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EnrollmentResponse(BaseModel):
+    id: UUID
+    lead_id: UUID
+    lead_name: str
+    lead_email: str
+    status: str
+    current_step: int
+    reply_override: bool
+    next_send_at: datetime | None = None
+    last_sent_at: datetime | None = None
+    enrolled_at: datetime
+    completed_at: datetime | None = None
+    deliveries: list[DeliveryResponse] = []
+
+
 class SuppressionInput(BaseModel):
     email: EmailStr
     reason: str = Field(default="Manual", min_length=1, max_length=40)

@@ -39,11 +39,15 @@ class SequenceEnrollment(Base):
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20), nullable=False, default="Active")
     current_step = Column(Integer, nullable=False, default=0)
+    reply_override = Column(Boolean, nullable=False, default=False)
     next_send_at = Column(DateTime(timezone=True), nullable=True)
     last_sent_at = Column(DateTime(timezone=True), nullable=True)
     enrolled_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
-    __table_args__ = (UniqueConstraint("sequence_id", "lead_id", name="uq_sequence_lead_enrollment"), Index("ix_sequence_enrollment_due", "status", "next_send_at"))
+    __table_args__ = (
+        Index("ix_sequence_enrollment_lead", "sequence_id", "lead_id"),
+        Index("ix_sequence_enrollment_due", "status", "next_send_at"),
+    )
 
 
 class SequenceDelivery(Base):
@@ -51,7 +55,7 @@ class SequenceDelivery(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     sequence_id = Column(UUID(as_uuid=True), ForeignKey("sequences.id", ondelete="CASCADE"), nullable=False)
     enrollment_id = Column(UUID(as_uuid=True), ForeignKey("sequence_enrollments.id", ondelete="CASCADE"), nullable=False)
-    step_id = Column(UUID(as_uuid=True), ForeignKey("sequence_steps.id", ondelete="CASCADE"), nullable=False)
+    step_id = Column(UUID(as_uuid=True), ForeignKey("sequence_steps.id", ondelete="SET NULL"), nullable=True)
     status = Column(String(20), nullable=False, default="Processing")
     attempt_count = Column(Integer, nullable=False, default=1)
     provider_message_id = Column(String(255), nullable=True)

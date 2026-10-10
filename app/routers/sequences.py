@@ -10,7 +10,7 @@ from app.models.sequence import EmailSuppression, Sequence, SequenceDelivery, Se
 from app.models.team_member import MemberRole
 from app.models.user import User
 from app.schemas.common import ApiResponse
-from app.schemas.sequences import EnrollmentInput, SequenceInput, SequenceResponse, SequenceStatusInput, SuppressionInput
+from app.schemas.sequences import EnrollmentInput, EnrollmentResponse, RestartEnrollmentInput, SequenceInput, SequenceResponse, SequenceStatusInput, SuppressionInput
 
 router = APIRouter(prefix="/sequences", tags=["sequences"])
 
@@ -85,8 +85,9 @@ async def update_sequence(sequence_id: UUID, payload: SequenceInput, db: AsyncSe
 
 
 @router.patch("/{sequence_id}/status", response_model=ApiResponse[SequenceResponse])
-async def change_status(sequence_id: UUID, payload: SequenceStatusInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+async def change_status(sequence_id: UUID, payload: SequenceStatusInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
     row = await owned_sequence(db, sequence_id, team_ctx.team_id)
+    if team_ctx.role == MemberRole.rep and row.owner_id != user.id: raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not own this sequence")
     if payload.status == "Active" and not await db.scalar(select(func.count()).select_from(SequenceStep).where(SequenceStep.sequence_id == row.id)): raise HTTPException(status.HTTP_409_CONFLICT, "Add at least one step")
     row.status = payload.status; await db.commit(); await db.refresh(row)
     return ApiResponse(success=True, message="Sequence status updated", data=await serialize(db, row))
@@ -110,6 +111,7 @@ async def delete_sequence(
 @router.post("/{sequence_id}/enroll", response_model=ApiResponse[dict])
 async def enroll(sequence_id: UUID, payload: EnrollmentInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
     row = await owned_sequence(db, sequence_id, team_ctx.team_id)
+    if team_ctx.role == MemberRole.rep and row.owner_id != user.id: raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not own this sequence")
     valid = set((await db.execute(select(Lead.id).where(Lead.team_id == team_ctx.team_id, Lead.id.in_(payload.lead_ids), Lead.email.is_not(None)))).scalars().all())
     existing = set((await db.execute(select(SequenceEnrollment.lead_id).where(SequenceEnrollment.sequence_id == row.id, SequenceEnrollment.lead_id.in_(valid)))).scalars().all())
     first = await db.scalar(select(SequenceStep).where(SequenceStep.sequence_id == row.id).order_by(SequenceStep.position))
@@ -118,3 +120,62 @@ async def enroll(sequence_id: UUID, payload: EnrollmentInput, db: AsyncSession =
     for lead_id in valid - existing: db.add(SequenceEnrollment(sequence_id=row.id, lead_id=lead_id, owner_id=user.id, next_send_at=now + timedelta(days=first.delay_days)))
     await db.commit()
     return ApiResponse(success=True, message="Leads enrolled", data={"enrolled": len(valid-existing), "skipped": len(payload.lead_ids)-len(valid-existing)})
+
+
+@router.get("/{sequence_id}/enrollments", response_model=ApiResponse[list[EnrollmentResponse]])
+async def enrollment_history(sequence_id: UUID, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    await owned_sequence(db, sequence_id, team_ctx.team_id)
+    rows = (await db.execute(
+        select(SequenceEnrollment, Lead)
+        .join(Lead, Lead.id == SequenceEnrollment.lead_id)
+        .where(SequenceEnrollment.sequence_id == sequence_id)
+        .order_by(SequenceEnrollment.enrolled_at.desc())
+    )).all()
+    data = []
+    for enrollment, lead in rows:
+        deliveries = (await db.execute(select(SequenceDelivery).where(SequenceDelivery.enrollment_id == enrollment.id).order_by(SequenceDelivery.created_at))).scalars().all()
+        data.append(EnrollmentResponse(
+            id=enrollment.id, lead_id=lead.id, lead_name=lead.name, lead_email=lead.email,
+            status=enrollment.status, current_step=enrollment.current_step,
+            reply_override=enrollment.reply_override, next_send_at=enrollment.next_send_at,
+            last_sent_at=enrollment.last_sent_at, enrolled_at=enrollment.enrolled_at,
+            completed_at=enrollment.completed_at, deliveries=deliveries,
+        ))
+    return ApiResponse(success=True, message="Enrollment history fetched", data=data)
+
+
+async def managed_enrollment(db, sequence_id, enrollment_id, team_id, user, role):
+    sequence = await owned_sequence(db, sequence_id, team_id)
+    if role == MemberRole.rep and sequence.owner_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not own this sequence")
+    enrollment = await db.scalar(select(SequenceEnrollment).where(SequenceEnrollment.id == enrollment_id, SequenceEnrollment.sequence_id == sequence.id))
+    if not enrollment: raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrollment not found")
+    return sequence, enrollment
+
+
+@router.post("/{sequence_id}/enrollments/{enrollment_id}/cancel", response_model=ApiResponse[dict])
+async def cancel_enrollment(sequence_id: UUID, enrollment_id: UUID, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
+    _, enrollment = await managed_enrollment(db, sequence_id, enrollment_id, team_ctx.team_id, user, team_ctx.role)
+    if enrollment.status != "Active": raise HTTPException(status.HTTP_409_CONFLICT, "Only active enrollments can be cancelled")
+    enrollment.status = "Cancelled"; enrollment.next_send_at = None; enrollment.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    return ApiResponse(success=True, message="Enrollment cancelled", data={})
+
+
+@router.post("/{sequence_id}/enrollments/{enrollment_id}/restart", response_model=ApiResponse[dict], status_code=201)
+async def restart_enrollment(sequence_id: UUID, enrollment_id: UUID, payload: RestartEnrollmentInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
+    sequence, enrollment = await managed_enrollment(db, sequence_id, enrollment_id, team_ctx.team_id, user, team_ctx.role)
+    if enrollment.status == "Active": raise HTTPException(status.HTTP_409_CONFLICT, "Cancel the active enrollment before restarting")
+    if await db.scalar(select(SequenceEnrollment.id).where(SequenceEnrollment.sequence_id == sequence.id, SequenceEnrollment.lead_id == enrollment.lead_id, SequenceEnrollment.status == "Active")):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This lead already has an active enrollment")
+    lead = await db.scalar(select(Lead).where(Lead.id == enrollment.lead_id, Lead.team_id == team_ctx.team_id))
+    if not lead: raise HTTPException(status.HTTP_404_NOT_FOUND, "Lead not found")
+    if lead.status == "Replied" and not payload.allow_replied:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Confirm that you want to contact this replied lead again")
+    if await db.scalar(select(EmailSuppression.id).where(EmailSuppression.team_id == team_ctx.team_id, EmailSuppression.email == lead.email.lower())):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Remove this address from the suppression list before restarting")
+    first = await db.scalar(select(SequenceStep).where(SequenceStep.sequence_id == sequence.id).order_by(SequenceStep.position))
+    if not first: raise HTTPException(status.HTTP_409_CONFLICT, "Sequence has no steps")
+    restarted = SequenceEnrollment(sequence_id=sequence.id, lead_id=lead.id, owner_id=user.id, reply_override=payload.allow_replied, next_send_at=datetime.now(timezone.utc) + timedelta(days=first.delay_days))
+    db.add(restarted); await db.commit(); await db.refresh(restarted)
+    return ApiResponse(success=True, message="Lead re-enrolled", data={"enrollment_id": str(restarted.id)})

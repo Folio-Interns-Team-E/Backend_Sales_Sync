@@ -49,7 +49,7 @@ async def process_due_enrollments(db: AsyncSession, batch_size: int = 20) -> dic
     result = {"claimed": len(rows), "sent": 0, "failed": 0, "stopped": 0, "limited": 0}
 
     for enrollment, sequence, lead in rows:
-        if sequence.stop_on_reply and lead.status == "Replied":
+        if sequence.stop_on_reply and not enrollment.reply_override and lead.status == "Replied":
             enrollment.status = "Replied"
             enrollment.next_send_at = None
             enrollment.completed_at = now
