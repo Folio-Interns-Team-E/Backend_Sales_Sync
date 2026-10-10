@@ -11,6 +11,7 @@ from app.models.team_member import MemberRole
 from app.models.user import User
 from app.schemas.common import ApiResponse
 from app.schemas.sequences import EnrollmentInput, EnrollmentResponse, RestartEnrollmentInput, SequenceInput, SequenceResponse, SequenceStatusInput, SuppressionInput
+from app.services.audit_service import record_audit_event
 
 router = APIRouter(prefix="/sequences", tags=["sequences"])
 
@@ -22,23 +23,23 @@ async def list_suppressions(db: AsyncSession = Depends(get_db), team_ctx: TeamCo
 
 
 @router.post("/suppressions", response_model=ApiResponse[dict], status_code=201)
-async def add_suppression(payload: SuppressionInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+async def add_suppression(payload: SuppressionInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
     if team_ctx.role == MemberRole.rep: raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can manage suppressions")
     email = payload.email.strip().lower()
     existing = await db.scalar(select(EmailSuppression).where(EmailSuppression.team_id == team_ctx.team_id, EmailSuppression.email == email))
     if existing:
         return ApiResponse(success=True, message="Address already suppressed", data={"id": str(existing.id)})
     row = EmailSuppression(team_id=team_ctx.team_id, email=email, reason=payload.reason, source="Manual")
-    db.add(row); await db.commit(); await db.refresh(row)
+    db.add(row); await db.flush(); record_audit_event(db, team_ctx.team_id, user.id, "email.suppressed", "email_suppression", row.id); await db.commit(); await db.refresh(row)
     return ApiResponse(success=True, message="Address suppressed", data={"id": str(row.id)})
 
 
 @router.delete("/suppressions/{suppression_id}", response_model=ApiResponse[dict])
-async def remove_suppression(suppression_id: UUID, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+async def remove_suppression(suppression_id: UUID, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
     if team_ctx.role == MemberRole.rep: raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can manage suppressions")
     row = await db.scalar(select(EmailSuppression).where(EmailSuppression.id == suppression_id, EmailSuppression.team_id == team_ctx.team_id))
     if not row: raise HTTPException(status.HTTP_404_NOT_FOUND, "Suppression not found")
-    await db.delete(row); await db.commit()
+    await db.delete(row); record_audit_event(db, team_ctx.team_id, user.id, "email.unsuppressed", "email_suppression", suppression_id); await db.commit()
     return ApiResponse(success=True, message="Suppression removed", data={})
 
 
@@ -68,7 +69,7 @@ async def create_sequence(payload: SequenceInput, db: AsyncSession = Depends(get
     row = Sequence(team_id=team_ctx.team_id, owner_id=user.id, name=payload.name, timezone=payload.timezone, daily_limit=payload.daily_limit, stop_on_reply=payload.stop_on_reply)
     db.add(row); await db.flush()
     for step in sorted(payload.steps, key=lambda item: item.position): db.add(SequenceStep(sequence_id=row.id, **step.model_dump()))
-    await db.commit(); await db.refresh(row)
+    record_audit_event(db, team_ctx.team_id, user.id, "sequence.created", "sequence", row.id); await db.commit(); await db.refresh(row)
     return ApiResponse(success=True, message="Sequence created", data=await serialize(db, row))
 
 
@@ -80,7 +81,7 @@ async def update_sequence(sequence_id: UUID, payload: SequenceInput, db: AsyncSe
     row.name = payload.name; row.timezone = payload.timezone; row.daily_limit = payload.daily_limit; row.stop_on_reply = payload.stop_on_reply
     await db.execute(delete(SequenceStep).where(SequenceStep.sequence_id == row.id))
     for step in sorted(payload.steps, key=lambda item: item.position): db.add(SequenceStep(sequence_id=row.id, **step.model_dump()))
-    await db.commit(); await db.refresh(row)
+    record_audit_event(db, team_ctx.team_id, user.id, "sequence.updated", "sequence", row.id); await db.commit(); await db.refresh(row)
     return ApiResponse(success=True, message="Sequence updated", data=await serialize(db, row))
 
 
@@ -89,7 +90,7 @@ async def change_status(sequence_id: UUID, payload: SequenceStatusInput, db: Asy
     row = await owned_sequence(db, sequence_id, team_ctx.team_id)
     if team_ctx.role == MemberRole.rep and row.owner_id != user.id: raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not own this sequence")
     if payload.status == "Active" and not await db.scalar(select(func.count()).select_from(SequenceStep).where(SequenceStep.sequence_id == row.id)): raise HTTPException(status.HTTP_409_CONFLICT, "Add at least one step")
-    row.status = payload.status; await db.commit(); await db.refresh(row)
+    row.status = payload.status; record_audit_event(db, team_ctx.team_id, user.id, "sequence.status_changed", "sequence", row.id); await db.commit(); await db.refresh(row)
     return ApiResponse(success=True, message="Sequence status updated", data=await serialize(db, row))
 
 
@@ -104,6 +105,7 @@ async def delete_sequence(
     if team_ctx.role == MemberRole.rep and row.owner_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not own this sequence")
     await db.delete(row)
+    record_audit_event(db, team_ctx.team_id, user.id, "sequence.deleted", "sequence", sequence_id)
     await db.commit()
     return ApiResponse(success=True, message="Sequence deleted", data={})
 
@@ -118,6 +120,7 @@ async def enroll(sequence_id: UUID, payload: EnrollmentInput, db: AsyncSession =
     if not first: raise HTTPException(status.HTTP_409_CONFLICT, "Sequence has no steps")
     now = datetime.now(timezone.utc)
     for lead_id in valid - existing: db.add(SequenceEnrollment(sequence_id=row.id, lead_id=lead_id, owner_id=user.id, next_send_at=now + timedelta(days=first.delay_days)))
+    if valid - existing: record_audit_event(db, team_ctx.team_id, user.id, "sequence.leads_enrolled", "sequence", row.id)
     await db.commit()
     return ApiResponse(success=True, message="Leads enrolled", data={"enrolled": len(valid-existing), "skipped": len(payload.lead_ids)-len(valid-existing)})
 
@@ -158,6 +161,7 @@ async def cancel_enrollment(sequence_id: UUID, enrollment_id: UUID, db: AsyncSes
     _, enrollment = await managed_enrollment(db, sequence_id, enrollment_id, team_ctx.team_id, user, team_ctx.role)
     if enrollment.status != "Active": raise HTTPException(status.HTTP_409_CONFLICT, "Only active enrollments can be cancelled")
     enrollment.status = "Cancelled"; enrollment.next_send_at = None; enrollment.completed_at = datetime.now(timezone.utc)
+    record_audit_event(db, team_ctx.team_id, user.id, "sequence.enrollment_cancelled", "sequence_enrollment", enrollment.id)
     await db.commit()
     return ApiResponse(success=True, message="Enrollment cancelled", data={})
 
@@ -177,5 +181,5 @@ async def restart_enrollment(sequence_id: UUID, enrollment_id: UUID, payload: Re
     first = await db.scalar(select(SequenceStep).where(SequenceStep.sequence_id == sequence.id).order_by(SequenceStep.position))
     if not first: raise HTTPException(status.HTTP_409_CONFLICT, "Sequence has no steps")
     restarted = SequenceEnrollment(sequence_id=sequence.id, lead_id=lead.id, owner_id=user.id, reply_override=payload.allow_replied, next_send_at=datetime.now(timezone.utc) + timedelta(days=first.delay_days))
-    db.add(restarted); await db.commit(); await db.refresh(restarted)
+    db.add(restarted); await db.flush(); record_audit_event(db, team_ctx.team_id, user.id, "sequence.enrollment_restarted", "sequence_enrollment", restarted.id); await db.commit(); await db.refresh(restarted)
     return ApiResponse(success=True, message="Lead re-enrolled", data={"enrollment_id": str(restarted.id)})

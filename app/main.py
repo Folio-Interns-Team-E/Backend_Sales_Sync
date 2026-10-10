@@ -3,13 +3,18 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from app.routers import auth, teams, onboarding, leads, emails, meetings, proposals, knowledge_base, chat, integrations, billing, admin_dashboard, opportunities, crm, sequences
+from app.routers import auth, teams, onboarding, leads, emails, meetings, proposals, knowledge_base, chat, integrations, billing, admin_dashboard, opportunities, crm, sequences, audit
 from app.database import engine, Base
 from app.config import settings
 from app.routers import social_auth
 from app.routers import security_activity
 from app.routers import health as health_router
 from app.models import team, user
+from app.core.observability import configure_logging, request_observability
+import logging
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="AI Sales Pipeline Agent",
@@ -26,6 +31,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+app.middleware("http")(request_observability)
 
 # routers
 app.include_router(auth.router)
@@ -46,6 +52,7 @@ app.include_router(admin_dashboard.router)
 app.include_router(opportunities.router)
 app.include_router(crm.router)
 app.include_router(sequences.router)
+app.include_router(audit.router)
 
 
 @app.exception_handler(HTTPException)
@@ -77,6 +84,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled application error")
     return JSONResponse(
         status_code=500,
         content={

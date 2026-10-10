@@ -16,6 +16,7 @@ from app.models.lead_provider import LeadProviderCredential
 from app.models.opportunity import Opportunity, OpportunityStage
 from app.models.crm import Account, Contact, SalesTask
 from app.models.sequence import Sequence, SequenceStep, SequenceEnrollment, SequenceDelivery, EmailSuppression
+from app.models.audit_event import AuditEvent
 
 
 __all__ = [
@@ -56,4 +57,5 @@ __all__ = [
     "SequenceEnrollment",
     "SequenceDelivery",
     "EmailSuppression",
+    "AuditEvent",
 ]

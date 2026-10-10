@@ -17,6 +17,8 @@ async def check_database():
         await connection.execute(text("SELECT id FROM users LIMIT 0"))
         await connection.execute(text("SELECT subject FROM oauth_identities LIMIT 0"))
         await connection.execute(text("SELECT id FROM security_events LIMIT 0"))
+        await connection.execute(text("SELECT id FROM audit_events LIMIT 0"))
+        await connection.execute(text("SELECT id FROM sequence_enrollments LIMIT 0"))
 
 
 async def check_redis():

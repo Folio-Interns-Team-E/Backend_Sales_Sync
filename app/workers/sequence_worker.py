@@ -5,8 +5,9 @@ import os
 from app.database import SessionLocal
 from app.services.sequence_delivery_service import process_due_enrollments
 from app.services.inbound_email_service import detect_sequence_replies_and_bounces
+from app.core.observability import configure_logging
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+configure_logging()
 logger = logging.getLogger(__name__)
 
 
