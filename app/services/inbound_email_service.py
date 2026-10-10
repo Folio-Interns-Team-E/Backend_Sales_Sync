@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.google_credentials import GoogleCredentials
 from app.models.lead import Lead
 from app.models.sequence import EmailSuppression, Sequence, SequenceEnrollment
-from app.services.gmail_service import search_gmail_messages
+from app.services.gmail_service import google_refresh_token, search_gmail_messages
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,8 @@ async def detect_sequence_replies_and_bounces(db: AsyncSession, batch_size: int 
         result["checked"] += 1
         after = gmail_after(enrollment.last_sent_at)
         try:
-            replies = await search_gmail_messages(credentials.refresh_token, f'from:{lead.email} after:{after}', 1)
+            refresh_token = google_refresh_token(credentials)
+            replies = await search_gmail_messages(refresh_token, f'from:{lead.email} after:{after}', 1)
             if replies:
                 lead.status = "Replied"
                 enrollment.status = "Replied"
@@ -50,7 +51,7 @@ async def detect_sequence_replies_and_bounces(db: AsyncSession, batch_size: int 
                 continue
 
             bounces = await search_gmail_messages(
-                credentials.refresh_token,
+                refresh_token,
                 f'from:(mailer-daemon@googlemail.com OR postmaster@google.com) "{lead.email}" after:{after}',
                 1,
             )

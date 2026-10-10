@@ -8,12 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from app.database import get_db
-from app.core.crypto import decrypt_key
+from app.core.crypto import decrypt_key, encrypt_key
 from app.middleware.auth_middleware import get_current_user, get_team_context, TeamContext
 from app.models.team_member import MemberRole, TeamMember
 from app.models.user import User
 from app.models.google_credentials import GoogleCredentials
-from app.services.gmail_service import exchange_authorization_code, fetch_google_email
+from app.services.gmail_service import begin_gmail_oauth, consume_gmail_oauth, exchange_authorization_code, fetch_google_email
 from app.config import settings
 from app.schemas.common import ApiResponse
 from app.schemas.calcom import CalComIntegrationCreate, CalComIntegrationResponse, CalComStatus, CalComEventTypeUpdate
@@ -34,7 +34,11 @@ def gmail_success_redirect_url() -> str:
 
 
 @router.get("/gmail/auth-url")
-async def gmail_auth_url(current_user: User = Depends(get_current_user)):
+async def gmail_auth_url(response: Response, current_user: User = Depends(get_current_user)):
+    try:
+        state, binding = begin_gmail_oauth(current_user.id)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     params = {
         "client_id": settings.google_client_id,
         "redirect_uri": f"{settings.backend_url}/integrations/gmail/callback",
@@ -42,22 +46,27 @@ async def gmail_auth_url(current_user: User = Depends(get_current_user)):
         "scope": "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly openid email",
         "access_type": "offline",
         "prompt": "consent",
-        "state": str(current_user.id),
+        "state": state,
     }
+    response.set_cookie("gmail_oauth_binding", binding, max_age=600, httponly=True, secure=settings.app_env.lower() != "development", samesite="lax", path="/integrations/gmail")
+    response.headers["Cache-Control"] = "no-store"
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     return {"success": True, "data": {"url": url}}
 
 
 @router.get("/gmail/callback")
 async def gmail_callback(
+    request: Request,
     code: str = Query(...),
     state: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        user_id = UUID(state)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid state parameter")
+        user_id = consume_gmail_oauth(state, request.cookies.get("gmail_oauth_binding"))
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -83,22 +92,26 @@ async def gmail_callback(
     existing = result.scalar_one_or_none()
 
     if existing:
-        existing.refresh_token = refresh_token
+        existing.encrypted_refresh_token = encrypt_key(refresh_token)
         existing.google_email = google_email
     else:
         creds = GoogleCredentials(
             user_id=user_id,
             google_email=google_email,
-            refresh_token=refresh_token,
+            encrypted_refresh_token=encrypt_key(refresh_token),
         )
         db.add(creds)
 
     await db.commit()
 
-    return RedirectResponse(
+    response = RedirectResponse(
         url=gmail_success_redirect_url(),
         status_code=302,
     )
+    response.delete_cookie("gmail_oauth_binding", path="/integrations/gmail")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 @router.get("/gmail/status")

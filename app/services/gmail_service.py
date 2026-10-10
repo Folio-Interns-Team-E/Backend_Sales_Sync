@@ -1,5 +1,9 @@
 import logging
 import base64
+import hashlib
+import hmac
+import json
+import secrets
 from email.mime.text import MIMEText
 from uuid import UUID
 
@@ -8,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.crypto import decrypt_key
+from app.core.redis import get_redis
 from app.database import SessionLocal
 from app.models.google_credentials import GoogleCredentials
 from app.models.lead import Lead
@@ -18,6 +24,44 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def begin_gmail_oauth(user_id: UUID) -> tuple[str, str]:
+    redis = get_redis()
+    if redis is None:
+        raise RuntimeError("Integration state service is unavailable")
+    state, binding = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+    redis.set(
+        "gmail_oauth:" + _digest(state),
+        json.dumps({"user_id": str(user_id), "binding": _digest(binding)}),
+        ex=600,
+        nx=True,
+    )
+    return state, binding
+
+
+def consume_gmail_oauth(state: str, binding: str | None) -> UUID:
+    if not state or len(state) > 128 or not binding:
+        raise ValueError("Invalid Gmail authorization state")
+    redis = get_redis()
+    if redis is None:
+        raise RuntimeError("Integration state service is unavailable")
+    key = "gmail_oauth:" + _digest(state)
+    raw = redis.get(key)
+    if not raw:
+        raise ValueError("Gmail authorization expired")
+    record = json.loads(raw)
+    if not hmac.compare_digest(record["binding"], _digest(binding)) or not redis.getdel(key):
+        raise ValueError("Invalid Gmail authorization state")
+    return UUID(record["user_id"])
+
+
+def google_refresh_token(credentials: GoogleCredentials) -> str:
+    return decrypt_key(credentials.encrypted_refresh_token)
 
 
 async def exchange_authorization_code(code: str) -> dict:
@@ -84,7 +128,7 @@ async def send_email_on_behalf_of_user(
     if not creds:
         raise RuntimeError(f"No Google credentials found for user {user_id}")
 
-    access_token = await refresh_access_token(creds.refresh_token)
+    access_token = await refresh_access_token(google_refresh_token(creds))
 
     message = MIMEText(body, "plain")
     message["To"] = recipient
