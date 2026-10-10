@@ -15,6 +15,7 @@ from app.models.subscription import Subscription, Invoice, SubscriptionTier, Sub
 from app.models.lead_provider import LeadProviderCredential
 from app.models.opportunity import Opportunity, OpportunityStage
 from app.models.crm import Account, Contact, SalesTask
+from app.models.sequence import Sequence, SequenceStep, SequenceEnrollment
 
 
 __all__ = [
@@ -50,4 +51,7 @@ __all__ = [
     "Account",
     "Contact",
     "SalesTask",
+    "Sequence",
+    "SequenceStep",
+    "SequenceEnrollment",
 ]
