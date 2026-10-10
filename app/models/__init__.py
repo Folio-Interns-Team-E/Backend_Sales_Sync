@@ -13,6 +13,7 @@ from app.models.google_credentials import GoogleCredentials
 from app.models.calcom_credentials import CalComIntegration
 from app.models.subscription import Subscription, Invoice, SubscriptionTier, SubscriptionStatus
 from app.models.lead_provider import LeadProviderCredential
+from app.models.opportunity import Opportunity, OpportunityStage
 
 
 __all__ = [
@@ -43,4 +44,6 @@ __all__ = [
     "SubscriptionTier",
     "SubscriptionStatus",
     "LeadProviderCredential",
+    "Opportunity",
+    "OpportunityStage",
 ]

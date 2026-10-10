@@ -18,7 +18,7 @@ class Team(Base):
 
     icp = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+
     invite_code = Column(
         String,
         unique=True,
@@ -54,7 +54,4 @@ class Team(Base):
 
     google_credentials = relationship("GoogleCredentials", back_populates="team", cascade="all, delete-orphan")
     calcom_integrations = relationship("CalComIntegration", back_populates="team", cascade="all, delete-orphan")
-
-
-
-    
+    opportunities = relationship("Opportunity", back_populates="team", cascade="all, delete-orphan")
