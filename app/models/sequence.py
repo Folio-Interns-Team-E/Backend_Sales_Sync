@@ -63,3 +63,17 @@ class SequenceDelivery(Base):
         UniqueConstraint("enrollment_id", "step_id", name="uq_sequence_delivery_step"),
         Index("ix_sequence_delivery_daily", "sequence_id", "status", "sent_at"),
     )
+
+
+class EmailSuppression(Base):
+    __tablename__ = "email_suppressions"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=False)
+    email = Column(String(320), nullable=False)
+    reason = Column(String(40), nullable=False)
+    source = Column(String(40), nullable=False, default="Gmail")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("team_id", "email", name="uq_email_suppression_team_email"),
+        Index("ix_email_suppression_lookup", "team_id", "email"),
+    )

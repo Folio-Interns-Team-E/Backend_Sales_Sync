@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class StepInput(BaseModel):
@@ -25,6 +25,11 @@ class SequenceStatusInput(BaseModel):
 
 class EnrollmentInput(BaseModel):
     lead_ids: list[UUID] = Field(min_length=1, max_length=500)
+
+
+class SuppressionInput(BaseModel):
+    email: EmailStr
+    reason: str = Field(default="Manual", min_length=1, max_length=40)
 
 
 class StepResponse(StepInput):

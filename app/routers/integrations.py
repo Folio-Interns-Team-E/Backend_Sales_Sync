@@ -39,7 +39,7 @@ async def gmail_auth_url(current_user: User = Depends(get_current_user)):
         "client_id": settings.google_client_id,
         "redirect_uri": f"{settings.backend_url}/integrations/gmail/callback",
         "response_type": "code",
-        "scope": "https://www.googleapis.com/auth/gmail.send openid email",
+        "scope": "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly openid email",
         "access_type": "offline",
         "prompt": "consent",
         "state": str(current_user.id),

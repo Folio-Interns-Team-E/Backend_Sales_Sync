@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.lead import Lead
-from app.models.sequence import Sequence, SequenceDelivery, SequenceEnrollment, SequenceStep
+from app.models.sequence import EmailSuppression, Sequence, SequenceDelivery, SequenceEnrollment, SequenceStep
 from app.services.gmail_service import send_email_on_behalf_of_user
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,17 @@ async def process_due_enrollments(db: AsyncSession, batch_size: int = 20) -> dic
     for enrollment, sequence, lead in rows:
         if sequence.stop_on_reply and lead.status == "Replied":
             enrollment.status = "Replied"
+            enrollment.next_send_at = None
+            enrollment.completed_at = now
+            result["stopped"] += 1
+            continue
+
+        suppressed = await db.scalar(select(EmailSuppression.id).where(
+            EmailSuppression.team_id == sequence.team_id,
+            func.lower(EmailSuppression.email) == lead.email.lower(),
+        ))
+        if suppressed:
+            enrollment.status = "Suppressed"
             enrollment.next_send_at = None
             enrollment.completed_at = now
             result["stopped"] += 1

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 
 
 async def exchange_authorization_code(code: str) -> dict:
@@ -55,6 +56,18 @@ async def refresh_access_token(refresh_token: str) -> str:
         resp.raise_for_status()
         data = resp.json()
         return data["access_token"]
+
+
+async def search_gmail_messages(refresh_token: str, query: str, max_results: int = 10) -> list[dict]:
+    access_token = await refresh_access_token(refresh_token)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            GMAIL_MESSAGES_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"q": query, "maxResults": max_results},
+        )
+        response.raise_for_status()
+        return response.json().get("messages", [])
 
 
 async def send_email_on_behalf_of_user(

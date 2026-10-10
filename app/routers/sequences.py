@@ -6,13 +6,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.middleware.auth_middleware import TeamContext, get_current_user, get_team_context
 from app.models.lead import Lead
-from app.models.sequence import Sequence, SequenceDelivery, SequenceEnrollment, SequenceStep
+from app.models.sequence import EmailSuppression, Sequence, SequenceDelivery, SequenceEnrollment, SequenceStep
 from app.models.team_member import MemberRole
 from app.models.user import User
 from app.schemas.common import ApiResponse
-from app.schemas.sequences import EnrollmentInput, SequenceInput, SequenceResponse, SequenceStatusInput
+from app.schemas.sequences import EnrollmentInput, SequenceInput, SequenceResponse, SequenceStatusInput, SuppressionInput
 
 router = APIRouter(prefix="/sequences", tags=["sequences"])
+
+
+@router.get("/suppressions", response_model=ApiResponse[list[dict]])
+async def list_suppressions(db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    rows = (await db.execute(select(EmailSuppression).where(EmailSuppression.team_id == team_ctx.team_id).order_by(EmailSuppression.created_at.desc()))).scalars().all()
+    return ApiResponse(success=True, message="Suppressions fetched", data=[{"id": str(row.id), "email": row.email, "reason": row.reason, "source": row.source, "created_at": row.created_at.isoformat()} for row in rows])
+
+
+@router.post("/suppressions", response_model=ApiResponse[dict], status_code=201)
+async def add_suppression(payload: SuppressionInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    if team_ctx.role == MemberRole.rep: raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can manage suppressions")
+    email = payload.email.strip().lower()
+    existing = await db.scalar(select(EmailSuppression).where(EmailSuppression.team_id == team_ctx.team_id, EmailSuppression.email == email))
+    if existing:
+        return ApiResponse(success=True, message="Address already suppressed", data={"id": str(existing.id)})
+    row = EmailSuppression(team_id=team_ctx.team_id, email=email, reason=payload.reason, source="Manual")
+    db.add(row); await db.commit(); await db.refresh(row)
+    return ApiResponse(success=True, message="Address suppressed", data={"id": str(row.id)})
+
+
+@router.delete("/suppressions/{suppression_id}", response_model=ApiResponse[dict])
+async def remove_suppression(suppression_id: UUID, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    if team_ctx.role == MemberRole.rep: raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can manage suppressions")
+    row = await db.scalar(select(EmailSuppression).where(EmailSuppression.id == suppression_id, EmailSuppression.team_id == team_ctx.team_id))
+    if not row: raise HTTPException(status.HTTP_404_NOT_FOUND, "Suppression not found")
+    await db.delete(row); await db.commit()
+    return ApiResponse(success=True, message="Suppression removed", data={})
 
 
 async def owned_sequence(db, sequence_id, team_id):

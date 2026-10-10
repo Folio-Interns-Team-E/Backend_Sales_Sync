@@ -4,6 +4,7 @@ import os
 
 from app.database import SessionLocal
 from app.services.sequence_delivery_service import process_due_enrollments
+from app.services.inbound_email_service import detect_sequence_replies_and_bounces
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -16,6 +17,9 @@ async def run() -> None:
     while True:
         try:
             async with SessionLocal() as db:
+                inbound = await detect_sequence_replies_and_bounces(db, batch_size)
+                if inbound["checked"]:
+                    logger.info("Sequence inbox batch: %s", inbound)
                 result = await process_due_enrollments(db, batch_size)
                 if result["claimed"]:
                     logger.info("Sequence delivery batch: %s", result)
