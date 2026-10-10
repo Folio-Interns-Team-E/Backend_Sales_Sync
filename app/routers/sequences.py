@@ -92,6 +92,21 @@ async def change_status(sequence_id: UUID, payload: SequenceStatusInput, db: Asy
     return ApiResponse(success=True, message="Sequence status updated", data=await serialize(db, row))
 
 
+@router.delete("/{sequence_id}", response_model=ApiResponse[dict])
+async def delete_sequence(
+    sequence_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    team_ctx: TeamContext = Depends(get_team_context),
+    user: User = Depends(get_current_user),
+):
+    row = await owned_sequence(db, sequence_id, team_ctx.team_id)
+    if team_ctx.role == MemberRole.rep and row.owner_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not own this sequence")
+    await db.delete(row)
+    await db.commit()
+    return ApiResponse(success=True, message="Sequence deleted", data={})
+
+
 @router.post("/{sequence_id}/enroll", response_model=ApiResponse[dict])
 async def enroll(sequence_id: UUID, payload: EnrollmentInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
     row = await owned_sequence(db, sequence_id, team_ctx.team_id)
