@@ -183,3 +183,25 @@ async def restart_enrollment(sequence_id: UUID, enrollment_id: UUID, payload: Re
     restarted = SequenceEnrollment(sequence_id=sequence.id, lead_id=lead.id, owner_id=user.id, reply_override=payload.allow_replied, next_send_at=datetime.now(timezone.utc) + timedelta(days=first.delay_days))
     db.add(restarted); await db.flush(); record_audit_event(db, team_ctx.team_id, user.id, "sequence.enrollment_restarted", "sequence_enrollment", restarted.id); await db.commit(); await db.refresh(restarted)
     return ApiResponse(success=True, message="Lead re-enrolled", data={"enrollment_id": str(restarted.id)})
+
+
+@router.post("/{sequence_id}/enrollments/{enrollment_id}/retry", response_model=ApiResponse[dict])
+async def retry_failed_enrollment(sequence_id: UUID, enrollment_id: UUID, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
+    sequence, enrollment = await managed_enrollment(db, sequence_id, enrollment_id, team_ctx.team_id, user, team_ctx.role)
+    if enrollment.status != "Failed":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only failed enrollments can be retried")
+    if sequence.status != "Active":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Activate the sequence before retrying this delivery")
+    failed_delivery = await db.scalar(
+        select(SequenceDelivery)
+        .where(SequenceDelivery.enrollment_id == enrollment.id, SequenceDelivery.status == "Failed")
+        .order_by(SequenceDelivery.updated_at.desc())
+    )
+    if not failed_delivery:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No failed delivery is available to retry")
+    enrollment.status = "Active"
+    enrollment.next_send_at = datetime.now(timezone.utc)
+    enrollment.completed_at = None
+    record_audit_event(db, team_ctx.team_id, user.id, "sequence.delivery_retry_requested", "sequence_delivery", failed_delivery.id)
+    await db.commit()
+    return ApiResponse(success=True, message="Failed delivery queued for retry", data={})
