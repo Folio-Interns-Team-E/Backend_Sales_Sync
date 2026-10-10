@@ -14,6 +14,7 @@ from app.models.calcom_credentials import CalComIntegration
 from app.models.subscription import Subscription, Invoice, SubscriptionTier, SubscriptionStatus
 from app.models.lead_provider import LeadProviderCredential
 from app.models.opportunity import Opportunity, OpportunityStage
+from app.models.crm import Account, Contact, SalesTask
 
 
 __all__ = [
@@ -46,4 +47,7 @@ __all__ = [
     "LeadProviderCredential",
     "Opportunity",
     "OpportunityStage",
+    "Account",
+    "Contact",
+    "SalesTask",
 ]
