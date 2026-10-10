@@ -17,6 +17,7 @@ from app.models.opportunity import Opportunity, OpportunityStage
 from app.models.crm import Account, Contact, SalesTask
 from app.models.sequence import Sequence, SequenceStep, SequenceEnrollment, SequenceDelivery, EmailSuppression
 from app.models.audit_event import AuditEvent
+from app.models.notification import Notification
 
 
 __all__ = [
@@ -58,4 +59,5 @@ __all__ = [
     "SequenceDelivery",
     "EmailSuppression",
     "AuditEvent",
+    "Notification",
 ]

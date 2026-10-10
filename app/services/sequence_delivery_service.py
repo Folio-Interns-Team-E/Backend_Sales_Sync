@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.lead import Lead
 from app.models.sequence import EmailSuppression, Sequence, SequenceDelivery, SequenceEnrollment, SequenceStep
 from app.services.gmail_service import send_email_on_behalf_of_user
+from app.services.notification_service import create_notification
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
@@ -128,6 +129,7 @@ async def process_due_enrollments(db: AsyncSession, batch_size: int = 20) -> dic
             if delivery.attempt_count >= MAX_ATTEMPTS:
                 enrollment.status = "Failed"
                 enrollment.next_send_at = None
+                create_notification(db, sequence.team_id, enrollment.owner_id, "sequence_failed", "Sequence delivery failed", f"Delivery to {lead.email} failed after {delivery.attempt_count} attempts.", "/sequences")
             else:
                 enrollment.next_send_at = now + timedelta(minutes=5 * (2 ** (delivery.attempt_count - 1)))
             result["failed"] += 1

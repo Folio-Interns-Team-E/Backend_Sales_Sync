@@ -9,6 +9,7 @@ from app.models.google_credentials import GoogleCredentials
 from app.models.lead import Lead
 from app.models.sequence import EmailSuppression, Sequence, SequenceEnrollment
 from app.services.gmail_service import google_refresh_token, search_gmail_messages
+from app.services.notification_service import create_notification
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ async def detect_sequence_replies_and_bounces(db: AsyncSession, batch_size: int 
                 enrollment.status = "Replied"
                 enrollment.next_send_at = None
                 enrollment.completed_at = now
+                create_notification(db, sequence.team_id, enrollment.owner_id, "lead_replied", "Lead replied", f"{lead.name} replied to your sequence email.", "/sequences")
                 result["replied"] += 1
                 continue
 
@@ -65,6 +67,7 @@ async def detect_sequence_replies_and_bounces(db: AsyncSession, batch_size: int 
                 enrollment.status = "Bounced"
                 enrollment.next_send_at = None
                 enrollment.completed_at = now
+                create_notification(db, sequence.team_id, enrollment.owner_id, "email_bounced", "Email bounced", f"Email to {lead.email} bounced and was added to suppressions.", "/sequences")
                 result["bounced"] += 1
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in {401, 403}:
