@@ -18,6 +18,7 @@ from app.models.crm import Account, Contact, SalesTask
 from app.models.sequence import Sequence, SequenceStep, SequenceEnrollment, SequenceDelivery, EmailSuppression
 from app.models.audit_event import AuditEvent
 from app.models.notification import Notification
+from app.models.api_key import WorkspaceApiKey
 
 
 __all__ = [
@@ -60,4 +61,5 @@ __all__ = [
     "EmailSuppression",
     "AuditEvent",
     "Notification",
+    "WorkspaceApiKey",
 ]

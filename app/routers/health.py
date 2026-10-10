@@ -20,6 +20,7 @@ async def check_database():
         await connection.execute(text("SELECT id FROM audit_events LIMIT 0"))
         await connection.execute(text("SELECT id FROM sequence_enrollments LIMIT 0"))
         await connection.execute(text("SELECT id FROM notifications LIMIT 0"))
+        await connection.execute(text("SELECT id FROM workspace_api_keys LIMIT 0"))
 
 
 async def check_redis():
