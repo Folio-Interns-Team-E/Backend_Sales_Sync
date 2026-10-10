@@ -43,6 +43,8 @@ class SequenceResponse(BaseModel):
     stop_on_reply: bool
     steps: list[StepResponse] = []
     active_enrollments: int = 0
+    sent_deliveries: int = 0
+    failed_deliveries: int = 0
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)

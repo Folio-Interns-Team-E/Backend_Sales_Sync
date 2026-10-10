@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.middleware.auth_middleware import TeamContext, get_current_user, get_team_context
 from app.models.lead import Lead
-from app.models.sequence import Sequence, SequenceEnrollment, SequenceStep
+from app.models.sequence import Sequence, SequenceDelivery, SequenceEnrollment, SequenceStep
 from app.models.team_member import MemberRole
 from app.models.user import User
 from app.schemas.common import ApiResponse
@@ -24,7 +24,9 @@ async def owned_sequence(db, sequence_id, team_id):
 async def serialize(db, row):
     steps = (await db.execute(select(SequenceStep).where(SequenceStep.sequence_id == row.id).order_by(SequenceStep.position))).scalars().all()
     count = await db.scalar(select(func.count()).select_from(SequenceEnrollment).where(SequenceEnrollment.sequence_id == row.id, SequenceEnrollment.status == "Active"))
-    row.steps = steps; row.active_enrollments = count or 0
+    sent = await db.scalar(select(func.count()).select_from(SequenceDelivery).where(SequenceDelivery.sequence_id == row.id, SequenceDelivery.status == "Sent"))
+    failed = await db.scalar(select(func.count()).select_from(SequenceDelivery).where(SequenceDelivery.sequence_id == row.id, SequenceDelivery.status == "Failed"))
+    row.steps = steps; row.active_enrollments = count or 0; row.sent_deliveries = sent or 0; row.failed_deliveries = failed or 0
     return row
 
 

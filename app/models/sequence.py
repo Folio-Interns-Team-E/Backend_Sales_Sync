@@ -44,3 +44,22 @@ class SequenceEnrollment(Base):
     enrolled_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     __table_args__ = (UniqueConstraint("sequence_id", "lead_id", name="uq_sequence_lead_enrollment"), Index("ix_sequence_enrollment_due", "status", "next_send_at"))
+
+
+class SequenceDelivery(Base):
+    __tablename__ = "sequence_deliveries"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sequence_id = Column(UUID(as_uuid=True), ForeignKey("sequences.id", ondelete="CASCADE"), nullable=False)
+    enrollment_id = Column(UUID(as_uuid=True), ForeignKey("sequence_enrollments.id", ondelete="CASCADE"), nullable=False)
+    step_id = Column(UUID(as_uuid=True), ForeignKey("sequence_steps.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(20), nullable=False, default="Processing")
+    attempt_count = Column(Integer, nullable=False, default=1)
+    provider_message_id = Column(String(255), nullable=True)
+    error = Column(Text, nullable=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("enrollment_id", "step_id", name="uq_sequence_delivery_step"),
+        Index("ix_sequence_delivery_daily", "sequence_id", "status", "sent_at"),
+    )

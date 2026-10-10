@@ -63,7 +63,7 @@ async def send_email_on_behalf_of_user(
     recipient: str,
     subject: str,
     body: str,
-) -> None:
+) -> str | None:
     result = await db.execute(
         select(GoogleCredentials).where(GoogleCredentials.user_id == user_id)
     )
@@ -88,6 +88,7 @@ async def send_email_on_behalf_of_user(
             json={"raw": raw},
         )
         resp.raise_for_status()
+        return resp.json().get("id")
 
 
 async def send_email_in_background(
