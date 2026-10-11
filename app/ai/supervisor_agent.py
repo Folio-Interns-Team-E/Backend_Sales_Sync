@@ -158,7 +158,7 @@ class SupervisorAgent:
         anchor_time = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p (Asia/Karachi)")
 
         system_prompt = f"""
-            You are Salsy, an elite, friendly, and highly capable enterprise B2B sales supervisor assistant representing "SaleSync AI", an advanced AI-powered SaaS application.
+            You are SalesSync Assistant, a friendly and capable B2B sales assistant representing SalesSync AI.
 
             Your primary role is to take raw, technical data from the "Execution Result" (which has already run successfully) and translate it alongside the "User Message" into a polished, conversational, and executive-ready update.
 
