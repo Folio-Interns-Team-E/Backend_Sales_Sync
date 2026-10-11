@@ -33,6 +33,16 @@ logger = logging.getLogger(__name__)
 
 class ChatService(ChatAgentsService):
 
+    ICP_QUESTIONS = (
+        "I can refine that into an ICP. Please tell me: (1) target countries or cities, "
+        "(2) restaurant type and size, (3) buyer roles, (4) their problems, and "
+        "(5) what you sell. I won't change your active ICP until you approve a draft."
+    )
+
+    @staticmethod
+    def _icp_confirmation(message: str) -> bool:
+        return message.strip().lower() in {"yes, save it", "save it", "approve and save", "confirm and save"}
+
     async def _get_team(self, team_id: UUID):
         result = await self.db.execute(select(Team).where(Team.id == team_id))
         team = result.scalar_one_or_none()
@@ -176,6 +186,8 @@ class ChatService(ChatAgentsService):
                 .limit(5)
             )
             db_history = history_res.scalars().all()
+            last_assistant = db_history[0] if db_history and db_history[0].sent_by == ChatRole.AI.value else None
+            icp_flow = (last_assistant.metadata_log or {}).get("icp_flow") if last_assistant else None
 
             messages_history = [
                 {
@@ -199,8 +211,12 @@ class ChatService(ChatAgentsService):
             await self.db.commit()
 
             # 4. AI processing — wrapped so a fallback message is always saved
+            response_metadata = {}
             try:
-                ai_response = await supervisor.extract_action(message, icp)
+                ai_response = (
+                    {"action": "ICP_FOLLOWUP", "parameters": {}}
+                    if icp_flow else await supervisor.extract_action(message, icp)
+                )
                 action = ai_response.get("action", "NORMAL")
                 params = ai_response.get("parameters", {})
 
@@ -209,25 +225,46 @@ class ChatService(ChatAgentsService):
                 print("==================AI ACTION==================")
 
                 if action == "UPDATE_ICP":
+                    response = self.ICP_QUESTIONS
+                    response_metadata = {"icp_flow": {"phase": "details", "request": message[:2000]}}
 
-                        # 1. Instantiate the new ICP Agent
-                    icp_agent = ICPAgent()
-
-                        # 2. Refine the raw user input into a professional GTM profile
-                    refined_icp = await icp_agent.refine_icp(message)
-
-                        # 3. Update the database record with the highly structured ICP
-                    await self.update_icp(team_id, refined_icp)
-
-                    print("===================NEW ICP===================\n\n")
-                    print(refined_icp)
-                    print("======================================\n\n")
-
-                    response = (
-                            "### Profile Refined & Updated Successfully\n\n"
-                            f"{refined_icp}\n\n"
-                            "*This target framework is now set as your active system ICP.*"
-                        )
+                elif action == "ICP_FOLLOWUP":
+                    phase = icp_flow.get("phase")
+                    if message.strip().lower() in {"cancel", "stop", "never mind"}:
+                        response = "Okay, I won't change your ICP."
+                    elif phase == "details":
+                        details = (icp_flow.get("details", "") + "\n" + message).strip()
+                        if len(details) < 25:
+                            response = "I need a little more detail before drafting. " + self.ICP_QUESTIONS
+                            response_metadata = {"icp_flow": icp_flow}
+                        else:
+                            try:
+                                draft = await ICPAgent().refine_icp(
+                                    f"Original request: {icp_flow.get('request', '')}\n"
+                                    f"User's targeting details: {details[:6000]}"
+                                )
+                                if not draft.startswith("Firmographics:") or len(draft) < 150:
+                                    raise ValueError("ICP draft did not match the required format")
+                            except Exception:
+                                logger.exception("Unable to draft ICP")
+                                response = "I couldn't prepare a reliable ICP draft right now, so I haven't changed your active ICP. Please try again in a moment."
+                            else:
+                                response = (
+                                    "Here's a proposed ICP based on your details:\n\n"
+                                    f"{draft}\n\n"
+                                    "Review it carefully. Reply **yes, save it** to activate it, "
+                                    "or tell me what to revise. Nothing has been saved yet."
+                                )
+                                response_metadata = {"icp_flow": {"phase": "confirm", "request": icp_flow.get("request", ""), "details": details[:6000], "draft": draft[:12000]}}
+                    elif phase == "confirm" and self._icp_confirmation(message):
+                        await self.update_icp(team_id, icp_flow["draft"])
+                        response = "Your approved ICP is now active. You can review it on the dashboard."
+                    elif phase == "confirm":
+                        response = "Please give me the changes you'd like, and I'll prepare a revised draft for approval."
+                        response_metadata = {"icp_flow": {"phase": "details", "request": icp_flow.get("request", ""), "details": icp_flow.get("details", "")}}
+                    else:
+                        response = self.ICP_QUESTIONS
+                        response_metadata = {"icp_flow": {"phase": "details", "request": message[:2000]}}
 
                 elif action == "GET_LEADS":
                     limit = params.get("limit", 20)
@@ -563,14 +600,16 @@ class ChatService(ChatAgentsService):
                         response = "I can help you search for prospects, analyze individuals, modify your ICP, or answer questions from your knowledge base. What would you like to do?"
 
 
-                supervisor = SupervisorAgent(self.db)
-                final_response = await supervisor.run(
-                    user_prompt=message,
-                    execution_result=response,
-                    team_id=team.id,
-                    messages_history=messages_history,
-                    user_info=user_info
-                )
+                if action in {"UPDATE_ICP", "ICP_FOLLOWUP"}:
+                    final_response = response
+                else:
+                    final_response = await supervisor.run(
+                        user_prompt=message,
+                        execution_result=response,
+                        team_id=team.id,
+                        messages_history=messages_history,
+                        user_info=user_info
+                    )
 
             except Exception as ai_err:
                 logger.error(f"AI processing failed: {repr(ai_err)}")
@@ -590,7 +629,7 @@ class ChatService(ChatAgentsService):
                 user_id=user_id,
                 sent_by=ChatRole.AI.value,
                 content=final_response,
-                metadata_log={},
+                metadata_log=response_metadata,
             )
             self.db.add(ai_msg)
             await self.db.commit()

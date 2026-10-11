@@ -29,11 +29,11 @@ class ICPAgent:
             INSTRUCTIONS:
             - Do NOT use markdown syntax (such as #, ##, **, or `) in your final output. 
             - Output pure, raw text using the exact indentation and key structure defined below.
-            - Infer missing information where reasonable using industry best practices.
+            - Use only facts the user supplied. Never invent geography, size, revenue, tools, pain points, or product capabilities.
             - Keep the output concise, structured, and easy for both humans and AI agents to consume.
             - Do NOT write long paragraphs.
             - Use bullet points and the YAML-like outline structure shown below.
-            - If information is unknown, infer sensible defaults instead of leaving sections empty.
+            - If information is unknown, write "Not specified" rather than guessing.
             - Do not include explanations, intro text, or conversational lines.
             - Start directly with the first key (Firmographics:).
 
@@ -218,5 +218,4 @@ class ICPAgent:
 
         except Exception as e:
             logger.error(f"ICPAgent failed to refine ICP: {e}", exc_info=True)
-            # Fallback to the raw input if LLM call fails
-            return raw_input
+            raise RuntimeError("ICP drafting is temporarily unavailable") from e
