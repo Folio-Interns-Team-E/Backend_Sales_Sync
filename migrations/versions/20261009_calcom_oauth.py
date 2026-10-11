@@ -9,12 +9,20 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("calcom_integrations", sa.Column("credential_type", sa.String(length=16), server_default="api_key", nullable=False))
-    op.add_column("calcom_integrations", sa.Column("encrypted_access_token", sa.String(), nullable=True))
-    op.add_column("calcom_integrations", sa.Column("encrypted_refresh_token", sa.String(), nullable=True))
-    op.add_column("calcom_integrations", sa.Column("token_expires_at", sa.DateTime(timezone=True), nullable=True))
-    op.alter_column("calcom_integrations", "encrypted_api_key", existing_type=sa.String(), nullable=True)
-    op.alter_column("calcom_integrations", "event_type_id", existing_type=sa.String(), nullable=True)
+    columns = {column["name"]: column for column in sa.inspect(op.get_bind()).get_columns("calcom_integrations")}
+    for column in (
+        sa.Column("credential_type", sa.String(length=16), server_default="api_key", nullable=False),
+        sa.Column("encrypted_access_token", sa.String(), nullable=True),
+        sa.Column("encrypted_refresh_token", sa.String(), nullable=True),
+        sa.Column("token_expires_at", sa.DateTime(timezone=True), nullable=True),
+    ):
+        if column.name not in columns:
+            op.add_column("calcom_integrations", column)
+    for name in ("encrypted_api_key", "event_type_id"):
+        if name not in columns:
+            raise RuntimeError(f"calcom_integrations.{name} is missing")
+        if not columns[name]["nullable"]:
+            op.alter_column("calcom_integrations", name, existing_type=sa.String(), nullable=True)
 
 
 def downgrade():

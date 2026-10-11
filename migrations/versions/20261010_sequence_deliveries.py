@@ -1,5 +1,6 @@
 """add sequence delivery tracking"""
 from alembic import op
+from migrations.schema_compat import create_table, create_index
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -10,7 +11,7 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
+    create_table(
         "sequence_deliveries",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("sequence_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("sequences.id", ondelete="CASCADE"), nullable=False),
@@ -25,7 +26,7 @@ def upgrade():
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.UniqueConstraint("enrollment_id", "step_id", name="uq_sequence_delivery_step"),
     )
-    op.create_index("ix_sequence_delivery_daily", "sequence_deliveries", ["sequence_id", "status", "sent_at"])
+    create_index("ix_sequence_delivery_daily", "sequence_deliveries", ["sequence_id", "status", "sent_at"])
 
 
 def downgrade():

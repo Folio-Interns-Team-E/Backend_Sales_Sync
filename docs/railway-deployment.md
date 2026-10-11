@@ -47,9 +47,9 @@ Before launch verify Railway's current trusted-proxy topology and set FORWARDED_
 
 ## Database safety gate
 
-Production startup does not create or alter tables. The historical first migration adds columns to an already existing `teams` table, so `alembic upgrade head` is NOT a fresh-database bootstrap. Some historical migrations are destructive. There is intentionally no automatic pre-deploy migration command until this history and the target database are reconciled.
+Production startup does not create or alter tables. The historical first migration adds columns to an already existing `teams` table, so `alembic upgrade head` is NOT a fresh-database bootstrap. Some historical migrations are destructive. Railway's pre-deploy command runs `alembic upgrade head`; review it against the actual database before enabling a deployment.
 
-For the existing database, verify required tables, current revision and schema on a backup/clone. Apply only the reviewed missing migrations. Do not blindly stamp head or replay old migrations. A failing `/ready` with `database=false` can indicate missing auth tables even if the network connection works.
+For the existing database, verify required tables, current revision and schema on a backup/clone. The October 2026 migrations now validate already-existing tables and skip their creation, while applying later column changes. The Cal.com workspace migration refuses to delete unassigned or duplicate rows; resolve those manually if encountered. Test the full upgrade and a restore on a Neon branch before deploying it to production. Do not blindly stamp head or replay old migrations against production without that rehearsal. A failing `/ready` with `database=false` can indicate missing auth tables even if the network connection works.
 
 For a move to Railway PostgreSQL: back up the source, test restoring into a new target, verify row counts and schema, preserve encryption keys, stop writes during final synchronization, switch DATABASE_URL, test, and retain the source for rollback. Do not delete the old database. An entirely empty production database needs a separately reviewed baseline/initialization plan before launch.
 

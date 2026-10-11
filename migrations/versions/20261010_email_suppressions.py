@@ -1,5 +1,6 @@
 """add email suppression list"""
 from alembic import op
+from migrations.schema_compat import create_table, create_index
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -10,7 +11,7 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
+    create_table(
         "email_suppressions",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("team_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("teams.id", ondelete="CASCADE"), nullable=False),
@@ -20,7 +21,7 @@ def upgrade():
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.UniqueConstraint("team_id", "email", name="uq_email_suppression_team_email"),
     )
-    op.create_index("ix_email_suppression_lookup", "email_suppressions", ["team_id", "email"])
+    create_index("ix_email_suppression_lookup", "email_suppressions", ["team_id", "email"])
 
 
 def downgrade():

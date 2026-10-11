@@ -1,5 +1,6 @@
 """encrypted workspace lead-provider credentials and usage limits"""
 from alembic import op
+from migrations.schema_compat import create_table, create_index
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -10,7 +11,7 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
+    create_table(
         "lead_provider_credentials",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("team_id", postgresql.UUID(as_uuid=True), nullable=False),

@@ -1,5 +1,6 @@
 """Add provider identities without changing existing users."""
 from alembic import op
+from migrations.schema_compat import create_table, create_index
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -10,14 +11,14 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
+    create_table(
         "oauth_identities",
         sa.Column("provider", sa.String(16), primary_key=True),
         sa.Column("subject", sa.String(255), primary_key=True),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.UniqueConstraint("user_id", "provider", name="uq_oauth_user_provider"),
     )
-    op.create_index("ix_oauth_identities_user_id", "oauth_identities", ["user_id"])
+    create_index("ix_oauth_identities_user_id", "oauth_identities", ["user_id"])
 
 
 def downgrade():

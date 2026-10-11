@@ -11,6 +11,9 @@ depends_on = None
 
 
 def upgrade():
+    # Alembic's default version column is VARCHAR(32), shorter than this
+    # revision identifier. Widen it before Alembic records the upgrade.
+    op.alter_column("alembic_version", "version_num", existing_type=sa.String(length=32), type_=sa.String(length=64))
     op.add_column("google_credentials", sa.Column("encrypted_refresh_token", sa.String(), nullable=True))
     connection = op.get_bind()
     rows = connection.execute(sa.text("SELECT id, refresh_token FROM google_credentials")).mappings().all()

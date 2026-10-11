@@ -1,5 +1,6 @@
 """add opportunities pipeline"""
 from alembic import op
+from migrations.schema_compat import create_table, create_index
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -10,7 +11,7 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
+    create_table(
         "opportunities",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("team_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -34,8 +35,8 @@ def upgrade():
         sa.ForeignKeyConstraint(["team_id"], ["teams.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_opportunities_team_stage", "opportunities", ["team_id", "stage"])
-    op.create_index("ix_opportunities_team_owner", "opportunities", ["team_id", "owner_id"])
+    create_index("ix_opportunities_team_stage", "opportunities", ["team_id", "stage"])
+    create_index("ix_opportunities_team_owner", "opportunities", ["team_id", "owner_id"])
 
 
 def downgrade():
