@@ -10,6 +10,8 @@ class User(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     full_name = Column(String, nullable=False)
+    company = Column(String(160), nullable=True)
+    job_title = Column(String(120), nullable=True)
     email = Column(String, unique=True, nullable=False, index=True)
     email_verified = Column(Boolean, nullable=False, default=False)
     hashed_password = Column(String, nullable=False)

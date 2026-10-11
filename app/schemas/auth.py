@@ -41,6 +41,36 @@ class LoginRequest(BaseModel):
     def password_must_fit_bcrypt(cls, password: str) -> str:
         return validate_bcrypt_password(password)
 
+
+class ProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    full_name: str = Field(min_length=1, max_length=120)
+    company: str | None = Field(default=None, max_length=160)
+    job_title: str | None = Field(default=None, max_length=120)
+
+    @field_validator("full_name")
+    @classmethod
+    def nonempty_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Name is required")
+        return value
+
+    @field_validator("company", "job_title")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        return (value.strip() or None) if value is not None else None
+
+
+class ProfileResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    full_name: str
+    email: EmailStr
+    company: str | None = None
+    job_title: str | None = None
+
 class TokenResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

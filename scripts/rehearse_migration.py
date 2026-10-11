@@ -42,8 +42,8 @@ with engine.connect() as connection:
         )
     """)).scalar_one()
 engine.dispose()
-target_revision = "20261011_invite_code_expiry"
-if version not in {"6f2efeef68f7", "20261011_workspace_api_keys", "20261011_logout_all_sessions", target_revision} or not oauth_exists:
+target_revision = "20261011_user_profile_fields"
+if version not in {"6f2efeef68f7", "20261011_workspace_api_keys", "20261011_logout_all_sessions", "20261011_invite_code_expiry", target_revision} or not oauth_exists:
     raise SystemExit("Test branch does not match the expected pre-migration schema; no changes made")
 if version == "6f2efeef68f7" and encrypted_exists:
     raise SystemExit("Unexpected encrypted Gmail column before migration; no changes made")
@@ -73,13 +73,18 @@ with engine.connect() as connection:
             AND column_name = 'refresh_token'
         )
     """)).scalar_one()
+    profile_columns = connection.execute(text("""
+        SELECT count(*) FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'users'
+          AND column_name IN ('company', 'job_title')
+    """)).scalar_one()
     gmail_tokens = connection.execute(text("SELECT encrypted_refresh_token FROM google_credentials")).scalars().all()
 engine.dispose()
 from app.core.crypto import decrypt_key
 for token in gmail_tokens:
     if not decrypt_key(token):
         raise SystemExit("An encrypted Gmail token did not decrypt")
-if version != target_revision or not encrypted_exists or old_column:
+if version != target_revision or not encrypted_exists or old_column or profile_columns != 2:
     raise SystemExit("The rehearsal did not reach the expected final schema")
 print(f"Final revision: {version}")
 print(f"Encrypted Gmail column present: {encrypted_exists}")

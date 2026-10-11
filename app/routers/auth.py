@@ -5,7 +5,7 @@ from app.schemas.auth import OTPRequest, OTPVerifyRequest
 from app.schemas.common import ApiResponse
 from app.services.auth_service import request_otp_service, verify_otp_service
 from app.database import get_db
-from app.schemas.auth import RegisterRequest, LoginRequest, RegisterResponse, LoginResponse
+from app.schemas.auth import RegisterRequest, LoginRequest, RegisterResponse, LoginResponse, ProfileUpdate, ProfileResponse
 from app.services.auth_service import register_user, login_user
 from app.models.user import User
 from app.core.security import (
@@ -29,6 +29,30 @@ from app.services.security_activity import record_security_event
 
 #router init (auth grouping)
 router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[Depends(require_auth_request)])
+
+
+@router.get("/profile", response_model=ApiResponse[ProfileResponse])
+async def get_profile(response: Response, current_user: User = Depends(get_current_user)):
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse(success=True, message="Profile fetched", data=ProfileResponse.model_validate(current_user))
+
+
+@router.patch("/profile", response_model=ApiResponse[ProfileResponse])
+async def update_profile(
+    payload: ProfileUpdate,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    authorization: str | None = Header(default=None),
+):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=403, detail="A signed-in browser session is required")
+    current_user.full_name = payload.full_name
+    current_user.company = payload.company
+    current_user.job_title = payload.job_title
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse(success=True, message="Profile updated", data=ProfileResponse.model_validate(current_user))
 
 
 @router.post("/password/request", response_model=ApiResponse[dict])
