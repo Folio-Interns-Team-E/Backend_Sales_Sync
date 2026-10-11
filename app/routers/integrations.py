@@ -13,6 +13,11 @@ from app.middleware.auth_middleware import get_current_user, get_team_context, T
 from app.models.team_member import MemberRole, TeamMember
 from app.models.user import User
 from app.models.google_credentials import GoogleCredentials
+from app.models.google_calendar_credentials import GoogleCalendarCredentials
+from app.services.google_calendar_service import (
+    begin_calendar_oauth, consume_calendar_oauth, calendar_callback_url,
+    exchange_calendar_code, save_calendar_credentials,
+)
 from app.services.gmail_service import begin_gmail_oauth, consume_gmail_oauth, exchange_authorization_code, fetch_google_email
 from app.config import settings
 from app.schemas.common import ApiResponse
@@ -26,6 +31,49 @@ from app.services.calcom_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
+
+
+@router.get("/google-calendar/auth-url")
+async def google_calendar_auth_url(response: Response, current_user: User = Depends(get_current_user)):
+    state, binding = begin_calendar_oauth(current_user.id)
+    params = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": calendar_callback_url(),
+        "response_type": "code",
+        "scope": "openid email https://www.googleapis.com/auth/calendar.events",
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    }
+    response.set_cookie("calendar_oauth_binding", binding, max_age=600, httponly=True, secure=settings.app_env.lower() != "development", samesite="lax", path="/integrations/google-calendar")
+    response.headers["Cache-Control"] = "no-store"
+    return {"success": True, "data": {"url": f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"}}
+
+
+@router.get("/google-calendar/callback")
+async def google_calendar_callback(request: Request, state: str = "", code: str = "", db: AsyncSession = Depends(get_db)):
+    user_id = consume_calendar_oauth(state, request.cookies.get("calendar_oauth_binding"))
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    try:
+        await save_calendar_credentials(db, user_id, await exchange_calendar_code(code))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Google Calendar authorization failed")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Google Calendar connection failed") from exc
+    response = RedirectResponse(settings.oauth_frontend_url.rstrip("/") + "/settings?calendar=connected", status_code=303)
+    response.delete_cookie("calendar_oauth_binding", path="/integrations/google-calendar")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@router.get("/google-calendar/status")
+async def google_calendar_status(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    record = (await db.execute(select(GoogleCalendarCredentials).where(GoogleCalendarCredentials.user_id == current_user.id))).scalar_one_or_none()
+    return {"success": True, "data": {"connected": record is not None, "email": record.google_email if record else None}}
 
 
 def gmail_success_redirect_url() -> str:

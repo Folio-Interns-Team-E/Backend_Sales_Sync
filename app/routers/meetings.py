@@ -42,7 +42,7 @@ async def create_meeting(
     meeting = await service.create_meeting(
     team_ctx.team_id, current_user.id, payload.lead_id,
     payload.date, payload.time, payload.timezone,
-    payload.calendar_event_id, payload.agenda, payload.notes,
+    payload.duration_minutes, payload.agenda, payload.notes,
     )
     return ApiResponse(success=True, message="Meeting created successfully", data=meeting)
 

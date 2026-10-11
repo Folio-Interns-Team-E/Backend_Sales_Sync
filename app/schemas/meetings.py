@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 from uuid import UUID
 from datetime import datetime, date, time
@@ -9,7 +9,7 @@ class MeetingCreate(BaseModel):
     date: date
     time: time
     timezone: str = "UTC"
-    calendar_event_id: Optional[str] = None
+    duration_minutes: int = Field(default=30, ge=15, le=240)
     agenda: Optional[str] = None
     notes: Optional[str] = None
 
@@ -31,6 +31,11 @@ class MeetingResponse(BaseModel):
     time: time
     timezone: str
     calendar_event_id: Optional[str] = None
+    calendar_provider: Optional[str] = None
+    meet_url: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    client: Optional[str] = None
+    company: Optional[str] = None
     agenda: Optional[str] = None
     notes: Optional[str] = None
     status: str

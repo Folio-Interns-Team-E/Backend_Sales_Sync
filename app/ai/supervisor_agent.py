@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models.lead import Lead
+from app.models.meeting import Meeting
 
 logger = logging.getLogger(__name__)
 
@@ -128,12 +129,31 @@ class SupervisorAgent:
             logger.warning(f"SupervisorAgent failed to pull database leads context: {e}")
             leads_context = []
 
+        try:
+            meeting_rows = (await self.db.execute(
+                select(Meeting, Lead)
+                .join(Lead, Meeting.lead_id == Lead.id)
+                .where(Lead.team_id == team_id)
+                .order_by(Meeting.date.desc())
+                .limit(20)
+            )).all()
+            meetings_context = [
+                {"prospect": lead.name, "company": lead.company_name, "date": str(meeting.date),
+                 "time": str(meeting.time), "timezone": meeting.timezone, "status": meeting.status,
+                 "agenda": meeting.agenda, "meet_url": meeting.meet_url}
+                for meeting, lead in meeting_rows
+            ]
+        except Exception as exc:
+            logger.warning("SupervisorAgent could not load meeting context: %s", exc)
+            meetings_context = []
+
         # 2. Compile response using the LLM with structured instruction parameters
         try:
             return await self._synthesize_response(
                 user_prompt=user_prompt,
                 execution_result=execution_result,
                 leads_context=leads_context,
+                meetings_context=meetings_context,
                 messages_history=messages_history or [],
                 user_info=user_info or {}
             )
@@ -149,6 +169,7 @@ class SupervisorAgent:
         user_prompt: str, 
         execution_result: str, 
         leads_context: list,
+        meetings_context: list,
         messages_history: list,
         user_info: dict
     ) -> str:
@@ -192,6 +213,11 @@ class SupervisorAgent:
             * CURRENT TEAM PROSPECTS CONTEXT:
             {json.dumps(leads_context, indent=2)}
 
+            * CURRENT TEAM MEETINGS CONTEXT (only this workspace):
+            {json.dumps(meetings_context, indent=2)}
+
+            When asked about meetings, use only these meeting records. Never invent dates, links, attendees, or completed actions. Never expose OAuth tokens or another workspace's data.
+
             ---
 
             ### ✍️ TONE AND FORMATTING RULES
@@ -199,7 +225,7 @@ class SupervisorAgent:
             2. **The Output:** Do NOT return JSON. Write in a simple, easy-to-read, and beautifully clean paragraph format. No dense markdown styling. Keep it short, direct, and to the point.
             3. **Emoji Rule:** You are allowed to use emojis, but keep it tasteful and minimal to keep things professional yet friendly. Use max 1-2 emojis contextually: 🧐 (debugging), 😎/💪 (success), 🎉/🥳 (milestones), or 🙌 (relief/teamwork). 😎
             4. **Data Synthesis:** Translate raw system data, tracking numbers, or event UIDs from the "Execution Result" into conversational, human-friendly sentences.
-            5. **Success Framing:** Assume whatever operation was triggered has already completed successfully. Celebrate the win and explain the outcome clearly to the user.
+            5. **Success Framing:** Only claim success when the execution result explicitly confirms it. Explain failures and missing connections plainly.
             6. Dont use "-" and "—"
             """
 

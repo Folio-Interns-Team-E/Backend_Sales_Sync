@@ -3,6 +3,7 @@ import re
 import logging
 from datetime import datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,8 @@ from app.config import settings
 from app.models.lead import Lead
 from app.models.meeting import Meeting, MeetingStatus
 from app.services.calcom_service import CalComService
+from app.services.meetings_service import MeetingService
+from app.services.google_calendar_service import delete_calendar_meeting
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,7 @@ class MeetingAgent:
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
 
-    async def run(self, user_prompt: str, team_id: UUID) -> str:
+    async def run(self, user_prompt: str, team_id: UUID, user_id: UUID) -> str:
         """
         Primary entry point for resolving and executing calendar-related intents.
         """
@@ -79,20 +82,20 @@ class MeetingAgent:
         # Handle Decision: CREATE
         if decision == "CREATE":
             start_time_str = parsed_decision.get("start_time")
-            return await self._execute_create(target_lead, start_time_str)
+            return await self._execute_create(target_lead, start_time_str, user_id, parsed_decision.get("timezone") or "Asia/Karachi")
 
         # Handle Decision: CANCEL (Passing the target cancel time)
         if decision == "CANCEL":
             target_cancel_time_str = parsed_decision.get("target_cancel_time")
             return await self._execute_cancel(target_lead, target_cancel_time_str)
 
-        return "Calcom API Key exhausted."
+        return "I couldn't determine the meeting action. Please specify the prospect and a date and time."
 
     async def _compile_meeting_decision(self, user_prompt: str, leads_context: list) -> dict:
         """
         Interacts with the LLM to parse and structure the scheduling intent.
         """
-        anchor_time = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p (Asia/Karachi)")
+        anchor_time = datetime.now(ZoneInfo("Asia/Karachi")).strftime("%A, %B %d, %Y, %I:%M %p (Asia/Karachi)")
 
         system_prompt = f"""You are an elite enterprise B2B sales scheduling assistant.
         Your job is to parse unstructured calendar scheduling requests and map them to known prospects.
@@ -113,6 +116,7 @@ class MeetingAgent:
             "decision": "CREATE" | "CANCEL" | "NEED_CLARIFICATION",
             "matched_lead_id": "string (UUID, or null)",
             "start_time": "string (ISO 8601 YYYY-MM-DDTHH:MM:SS, for CREATE, otherwise null)",
+            "timezone": "IANA time zone such as Asia/Karachi; default to Asia/Karachi if not specified",
             "target_cancel_time": "string (ISO 8601 YYYY-MM-DDTHH:MM:SS, only for CANCEL if specified, otherwise null)",
             "clarification_message": "string (or null)"
         }}
@@ -150,31 +154,30 @@ class MeetingAgent:
             cleaned = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.IGNORECASE)
             return json.loads(cleaned)
 
-    async def _execute_create(self, lead: Lead, start_time_str: str) -> str:
+    async def _execute_create(self, lead: Lead, start_time_str: str, user_id: UUID, timezone_name: str) -> str:
         if not start_time_str:
             return "Meeting Agent could not isolate a valid clean timestamp. Could you specify a time?"
 
         try:
+            tz = ZoneInfo(timezone_name)
             start_time_dt = datetime.fromisoformat(start_time_str)
-            cal_service = CalComService(self.db, lead.team_id)
-
-            await cal_service.create_booking(
-                lead_id=lead.id,
-                start_time=start_time_dt,
-                name=lead.name,
-                email=lead.email,
-                agenda=f"AI Agent Automated Demo Routing with {lead.company_name or 'Lead'}"
+            if start_time_dt.tzinfo is not None:
+                start_time_dt = start_time_dt.astimezone(tz)
+            meeting = await MeetingService(self.db).create_meeting(
+                lead.team_id, user_id, lead.id, start_time_dt.date(), start_time_dt.time(),
+                timezone_name, 30, f"Sales conversation with {lead.name}",
             )
 
             return (
                 f"Meeting Scheduled Successfully!\n"
                 f"Attendee: {lead.name} ({lead.email or 'No email'})\n"
-                f"Time: {start_time_dt.strftime('%Y-%m-%d %I:%M %p')} \n\n"
-                f"The event has been securely updated in your calendar and synced locally to your pipeline tracker."
+                f"Time: {start_time_dt.strftime('%Y-%m-%d %I:%M %p')} ({timezone_name})\n\n"
+                f"Google Meet link: {meeting.meet_url}\n"
+                "The meeting is on your Google Calendar and in SalesSync. Share the link with the prospect when ready."
             )
         except Exception as e:
-            logger.error(f"CalCom booking creation failed: {e}", exc_info=True)
-            return f"Failed to execute calendar booking on Cal.com: {str(e)}"
+            logger.error("Google Calendar meeting creation failed: %s", e, exc_info=True)
+            return f"Could not schedule the meeting: {str(e)}"
 
     async def _execute_cancel(self, lead: Lead, target_cancel_time_str: str | None) -> str:
         # 1. Build base query
@@ -234,11 +237,13 @@ class MeetingAgent:
 
         # 4. Perform cancellation
         try:
-            cal_service = CalComService(self.db, lead.team_id)
-            await cal_service.cancel_booking(
-                booking_uid=active_meeting.calendar_event_id,
-                meeting_id=active_meeting.id
-            )
+            if active_meeting.calendar_provider == "google":
+                await delete_calendar_meeting(self.db, active_meeting.created_by, active_meeting.calendar_event_id)
+                active_meeting.status = MeetingStatus.CANCELLED.value
+                await self.db.commit()
+            else:
+                cal_service = CalComService(self.db, lead.team_id)
+                await cal_service.cancel_booking(booking_uid=active_meeting.calendar_event_id, meeting_id=active_meeting.id)
 
             meeting_time_str = f"{active_meeting.date} {active_meeting.time}"
             return (

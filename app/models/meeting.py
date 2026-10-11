@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Date, Time, Text, ForeignKey, CheckConstraint
+from sqlalchemy import Column, String, DateTime, Date, Time, Text, ForeignKey, CheckConstraint, Integer
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -34,6 +34,9 @@ class Meeting(Base):
     time = Column(Time, nullable=False)
     timezone = Column(String, default="UTC", nullable=False)
     calendar_event_id = Column(String, nullable=True)
+    calendar_provider = Column(String, nullable=True)
+    meet_url = Column(String, nullable=True)
+    duration_minutes = Column(Integer, nullable=True)
 
     # 📝 Content & AI Input Sandbox
     agenda = Column(Text, nullable=True)      # e.g., ["Intro", "Demo"]

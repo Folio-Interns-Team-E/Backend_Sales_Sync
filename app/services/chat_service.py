@@ -458,7 +458,8 @@ class ChatService(ChatAgentsService):
 
                     response = await meeting_agent.run(
                         user_prompt=message,
-                        team_id=team.id
+                        team_id=team.id,
+                        user_id=user_id,
                     )
 
 
@@ -600,7 +601,7 @@ class ChatService(ChatAgentsService):
                         response = "I can help you search for prospects, analyze individuals, modify your ICP, or answer questions from your knowledge base. What would you like to do?"
 
 
-                if action in {"UPDATE_ICP", "ICP_FOLLOWUP"}:
+                if action in {"UPDATE_ICP", "ICP_FOLLOWUP", "MEETING_OPERATION"}:
                     final_response = response
                 else:
                     final_response = await supervisor.run(
