@@ -96,5 +96,7 @@ async def test_database_readiness_requires_current_migration(database_heads, rea
                 await health.check_database()
 
     statements = [str(call.args[0]) for call in connection.execute.await_args_list]
-    assert "SELECT encrypted_refresh_token FROM google_credentials LIMIT 0" in statements
+    assert len(statements) == 2
+    assert "gc.encrypted_refresh_token" in statements[0]
+    assert "ci.encrypted_access_token" in statements[0]
     assert "SELECT version_num FROM alembic_version" in statements

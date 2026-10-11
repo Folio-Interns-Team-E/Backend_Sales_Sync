@@ -23,21 +23,19 @@ def expected_migration_heads() -> set[str]:
 
 async def check_database():
     async with engine.connect() as connection:
-        await connection.execute(text("SELECT 1"))
-        # Catch missing tables needed for authentication before routing traffic.
-        await connection.execute(text("SELECT id FROM users LIMIT 0"))
-        await connection.execute(text("SELECT subject FROM oauth_identities LIMIT 0"))
-        await connection.execute(text("SELECT id FROM security_events LIMIT 0"))
-        await connection.execute(text("SELECT id FROM audit_events LIMIT 0"))
-        await connection.execute(text("SELECT id FROM sequence_enrollments LIMIT 0"))
-        await connection.execute(text("SELECT id FROM notifications LIMIT 0"))
-        await connection.execute(text("SELECT id FROM workspace_api_keys LIMIT 0"))
-        # A table can exist while required columns are still missing (or a
-        # migration was stamped without actually changing the schema).
-        await connection.execute(text("SELECT company, job_title, session_version FROM users LIMIT 0"))
-        await connection.execute(text("SELECT encrypted_refresh_token FROM google_credentials LIMIT 0"))
-        await connection.execute(text("SELECT encrypted_access_token FROM calcom_integrations LIMIT 0"))
-        await connection.execute(text("SELECT reply_override FROM sequence_enrollments LIMIT 0"))
+        # LIMIT 0 validates required tables and columns without reading data.
+        # Keep this in one round trip: Railway and Neon may be far apart.
+        await connection.execute(text("""
+            SELECT u.id, u.company, u.job_title, u.session_version,
+                   oi.subject, se.id, ae.id, sne.id, sne.reply_override,
+                   n.id, wak.id, gc.encrypted_refresh_token,
+                   ci.encrypted_access_token
+            FROM users AS u, oauth_identities AS oi, security_events AS se,
+                 audit_events AS ae, sequence_enrollments AS sne,
+                 notifications AS n, workspace_api_keys AS wak,
+                 google_credentials AS gc, calcom_integrations AS ci
+            LIMIT 0
+        """))
         versions = await connection.execute(text("SELECT version_num FROM alembic_version"))
         if set(versions.scalars().all()) != expected_migration_heads():
             raise RuntimeError("Database migrations are not at the deployed revision")
@@ -55,7 +53,7 @@ async def check_redis():
 @router.get("/ready")
 async def readiness():
     results = await asyncio.gather(
-        asyncio.wait_for(check_database(), timeout=5),
+        asyncio.wait_for(check_database(), timeout=20),
         asyncio.wait_for(check_redis(), timeout=5),
         return_exceptions=True,
     )
