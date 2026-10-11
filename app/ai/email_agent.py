@@ -16,7 +16,7 @@ class EmailAgent:
     """
 
     BASE_URL = "https://api.groq.com/openai/v1"
-    MODEL = "llama-3.3-70b-versatile"
+    MODEL = "openai/gpt-oss-120b"
 
     def _extract_json(self, text: str) -> dict:
         """

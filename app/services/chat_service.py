@@ -469,7 +469,6 @@ class ChatService(ChatAgentsService):
                     from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome
                     from app.ai.proposal_agent import ProposalAgent
                     from sqlalchemy.exc import DBAPIError, IntegrityError
-                    import traceback
 
                     name_keywords = params.get("keywords", [])
                     lead_id = None
