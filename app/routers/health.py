@@ -1,5 +1,8 @@
 import asyncio
+from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -8,6 +11,13 @@ from app.core.redis import get_redis
 from app.database import engine
 
 router = APIRouter(tags=["health"])
+MIGRATION_CONFIG = Path(__file__).resolve().parents[2] / "alembic.ini"
+
+
+def expected_migration_heads() -> set[str]:
+    config = Config(str(MIGRATION_CONFIG))
+    config.set_main_option("script_location", str(MIGRATION_CONFIG.parent / "migrations"))
+    return set(ScriptDirectory.from_config(config).get_heads())
 
 
 async def check_database():
@@ -21,6 +31,15 @@ async def check_database():
         await connection.execute(text("SELECT id FROM sequence_enrollments LIMIT 0"))
         await connection.execute(text("SELECT id FROM notifications LIMIT 0"))
         await connection.execute(text("SELECT id FROM workspace_api_keys LIMIT 0"))
+        # A table can exist while required columns are still missing (or a
+        # migration was stamped without actually changing the schema).
+        await connection.execute(text("SELECT company, job_title, session_version FROM users LIMIT 0"))
+        await connection.execute(text("SELECT encrypted_refresh_token FROM google_credentials LIMIT 0"))
+        await connection.execute(text("SELECT encrypted_access_token FROM calcom_integrations LIMIT 0"))
+        await connection.execute(text("SELECT reply_override FROM sequence_enrollments LIMIT 0"))
+        versions = await connection.execute(text("SELECT version_num FROM alembic_version"))
+        if set(versions.scalars().all()) != expected_migration_heads():
+            raise RuntimeError("Database migrations are not at the deployed revision")
 
 
 async def check_redis():

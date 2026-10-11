@@ -1,11 +1,16 @@
 import json
-from unittest.mock import AsyncMock, patch
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.core.database_config import async_database_options
 from app.routers import health
 from app.serve import server_options
+
+
+def test_readiness_uses_deployed_migration_files():
+    assert health.expected_migration_heads() == {"20261011_user_profile_fields"}
 
 
 @pytest.mark.parametrize("scheme", ["postgres", "postgresql", "postgresql+asyncpg"])
@@ -66,3 +71,30 @@ async def test_production_startup_does_not_mutate_schema():
     with patch.object(main.settings, "app_env", "production"), patch.object(main, "engine") as engine:
         await main.startup()
     engine.begin.assert_not_called()
+
+
+@pytest.mark.parametrize("database_heads,ready", [(["current"], True), (["previous"], False), ([], False)])
+async def test_database_readiness_requires_current_migration(database_heads, ready):
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = database_heads
+    connection = MagicMock()
+    connection.execute = AsyncMock(return_value=result)
+
+    @asynccontextmanager
+    async def connect():
+        yield connection
+
+    fake_engine = MagicMock()
+    fake_engine.connect = connect
+    with patch.object(health, "engine", fake_engine), patch.object(
+        health, "expected_migration_heads", return_value={"current"}
+    ):
+        if ready:
+            await health.check_database()
+        else:
+            with pytest.raises(RuntimeError, match="migrations"):
+                await health.check_database()
+
+    statements = [str(call.args[0]) for call in connection.execute.await_args_list]
+    assert "SELECT encrypted_refresh_token FROM google_credentials LIMIT 0" in statements
+    assert "SELECT version_num FROM alembic_version" in statements
