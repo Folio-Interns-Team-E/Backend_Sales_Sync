@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.core.redis import get_redis
+from app.core.worker_health import sequence_worker_is_healthy
 from app.database import engine
 
 router = APIRouter(tags=["health"])
@@ -63,5 +64,18 @@ async def readiness():
     return JSONResponse(
         status_code=200 if ready else 503,
         content={"success": ready, "data": checks},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/ready/sequence-worker")
+async def sequence_worker_readiness():
+    try:
+        healthy = await asyncio.wait_for(sequence_worker_is_healthy(), timeout=5)
+    except Exception:
+        healthy = False
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={"success": healthy, "data": {"sequence_worker": healthy}},
         headers={"Cache-Control": "no-store"},
     )
