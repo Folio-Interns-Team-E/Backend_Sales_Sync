@@ -21,11 +21,12 @@ REFRESH_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 def session_claims(user) -> dict:
     # A password change invalidates every previously issued session.
     version = hmac.new(settings.jwt_secret.encode(), user.hashed_password.encode(), hashlib.sha256).hexdigest()
-    return {"sub": str(user.id), "pwd": version}
+    return {"sub": str(user.id), "pwd": version, "sv": int(getattr(user, "session_version", 0) or 0)}
 
 
 def session_matches_user(payload: dict, user) -> bool:
-    return hmac.compare_digest(str(payload.get("pwd", "")), session_claims(user)["pwd"])
+    claims = session_claims(user)
+    return hmac.compare_digest(str(payload.get("pwd", "")), claims["pwd"]) and payload.get("sv", 0) == claims["sv"]
 
 def ensure_bcrypt_password_size(password: str) -> None:
     if len(password.encode("utf-8")) > 72:

@@ -16,6 +16,7 @@ class SecurityAction(str, enum.Enum):
     github_login = "github_login"
     google_linked = "google_linked"
     github_linked = "github_linked"
+    logout_all = "logout_all"
 
 
 class SecurityEvent(Base):

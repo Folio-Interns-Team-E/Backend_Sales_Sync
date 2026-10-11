@@ -42,7 +42,8 @@ with engine.connect() as connection:
         )
     """)).scalar_one()
 engine.dispose()
-if version not in {"6f2efeef68f7", "20261011_workspace_api_keys"} or not oauth_exists:
+target_revision = "20261011_logout_all_sessions"
+if version not in {"6f2efeef68f7", "20261011_workspace_api_keys", target_revision} or not oauth_exists:
     raise SystemExit("Test branch does not match the expected pre-migration schema; no changes made")
 if version == "6f2efeef68f7" and encrypted_exists:
     raise SystemExit("Unexpected encrypted Gmail column before migration; no changes made")
@@ -52,7 +53,7 @@ print(f"Starting revision: {version}")
 os.environ["DATABASE_URL"] = test_url
 os.environ["DB_ENCRYPTION_KEY"] = encryption_key
 config = Config(str(ROOT / "alembic.ini"))
-if version != "20261011_workspace_api_keys":
+if version != target_revision:
     command.upgrade(config, "head")
 
 engine = create_engine(sync_url)
@@ -78,7 +79,7 @@ from app.core.crypto import decrypt_key
 for token in gmail_tokens:
     if not decrypt_key(token):
         raise SystemExit("An encrypted Gmail token did not decrypt")
-if version != "20261011_workspace_api_keys" or not encrypted_exists or old_column:
+if version != target_revision or not encrypted_exists or old_column:
     raise SystemExit("The rehearsal did not reach the expected final schema")
 print(f"Final revision: {version}")
 print(f"Encrypted Gmail column present: {encrypted_exists}")

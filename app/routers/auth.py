@@ -1,5 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Request, Response, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.auth import OTPRequest, OTPVerifyRequest
 from app.schemas.common import ApiResponse
@@ -23,6 +23,9 @@ from uuid import UUID
 from app.schemas.auth import PasswordResetRequest, PasswordResetConfirm
 from app.services.password_recovery import request_reset, confirm_reset
 from app.middleware.csrf import require_auth_request
+from app.middleware.auth_middleware import get_current_user
+from app.models.security_event import SecurityAction
+from app.services.security_activity import record_security_event
 
 #router init (auth grouping)
 router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[Depends(require_auth_request)])
@@ -154,6 +157,28 @@ async def logout(
             revoke_token(payload)
 
     _clear_refresh_cookie(response)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_all(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    authorization: str | None = Header(default=None),
+):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=403, detail="A signed-in browser session is required")
+    await db.execute(
+        update(User)
+        .where(User.id == current_user.id)
+        .values(session_version=User.session_version + 1)
+    )
+    record_security_event(db, current_user.id, SecurityAction.logout_all)
+    await db.commit()
+    _clear_refresh_cookie(response)
+    response.headers["Cache-Control"] = "no-store"
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
