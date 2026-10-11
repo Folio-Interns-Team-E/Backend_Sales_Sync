@@ -38,6 +38,7 @@ class TeamResponse(BaseModel):
     id: UUID
     name: str
     invite_code: str | None = None
+    invite_code_expires_at: datetime | None = None
     created_at: datetime
     members: list[MemberResponse] = Field(default_factory=list)
 
@@ -48,5 +49,6 @@ class UserTeamResponse(BaseModel):
     id: UUID
     name: str
     invite_code: str | None = None
+    invite_code_expires_at: datetime | None = None
     created_at: datetime
     role: MemberRole

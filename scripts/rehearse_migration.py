@@ -42,8 +42,8 @@ with engine.connect() as connection:
         )
     """)).scalar_one()
 engine.dispose()
-target_revision = "20261011_logout_all_sessions"
-if version not in {"6f2efeef68f7", "20261011_workspace_api_keys", target_revision} or not oauth_exists:
+target_revision = "20261011_invite_code_expiry"
+if version not in {"6f2efeef68f7", "20261011_workspace_api_keys", "20261011_logout_all_sessions", target_revision} or not oauth_exists:
     raise SystemExit("Test branch does not match the expected pre-migration schema; no changes made")
 if version == "6f2efeef68f7" and encrypted_exists:
     raise SystemExit("Unexpected encrypted Gmail column before migration; no changes made")

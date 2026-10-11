@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, Mock, patch
 from uuid import uuid4
@@ -69,6 +69,7 @@ async def test_invitation_targets_selected_team_only() -> None:
         id=team_id,
         name="Selected Team",
         invite_code="selected-team-code",
+        invite_code_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
         created_at=datetime.now(timezone.utc),
         members=[],
     )

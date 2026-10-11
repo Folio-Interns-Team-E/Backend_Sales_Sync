@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from uuid import UUID
 import logging
 import secrets
+from datetime import datetime, timedelta, timezone
 import resend
 from app.models.user import User
 from app.models.team import Team
@@ -34,6 +35,7 @@ def _build_team_response(team: Team, *, include_invite_code: bool = False) -> Te
         id=team.id,
         name=team.name,
         invite_code=team.invite_code if include_invite_code else None,
+        invite_code_expires_at=getattr(team, "invite_code_expires_at", None) if include_invite_code else None,
         created_at=team.created_at,
         members=members
     )
@@ -190,6 +192,9 @@ async def invite_member(
             detail="Team not found"
         )
 
+    if team.invite_code_expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite code expired; ask an admin to rotate it")
+
     await _send_team_invite_email(
         to_email=payload.email,
         team_name=team.name,
@@ -220,6 +225,9 @@ async def join_existing_team(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invalid invite code"
         )
+
+    if team.invite_code_expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Invite code expired")
 
     existing_membership = await _get_membership(current_user.id, team.id, db)
     if existing_membership:
@@ -339,7 +347,7 @@ async def get_team_invite_code(
             detail="Team not found"
         )
 
-    data = {"invite_code": team.invite_code}
+    data = {"invite_code": team.invite_code, "invite_code_expires_at": team.invite_code_expires_at}
     return data
 
 
@@ -352,9 +360,10 @@ async def rotate_team_invite_code(team_id: UUID, current_user: User, db: AsyncSe
     if team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
     team.invite_code = secrets.token_urlsafe(18)
+    team.invite_code_expires_at = datetime.now(timezone.utc) + timedelta(days=30)
     record_audit_event(db, team_id, current_user.id, "workspace.invite_code_rotated", "team", team_id)
     await db.commit()
-    return {"invite_code": team.invite_code}
+    return {"invite_code": team.invite_code, "invite_code_expires_at": team.invite_code_expires_at}
 
 
 async def check_user_has_team(user_id: UUID, db: AsyncSession) -> bool:
@@ -432,6 +441,7 @@ async def get_user_teams(current_user: User, db: AsyncSession) -> list[UserTeamR
             id=tm.team.id,
             name=tm.team.name,
             invite_code=tm.team.invite_code if tm.role == MemberRole.admin else None,
+            invite_code_expires_at=tm.team.invite_code_expires_at if tm.role == MemberRole.admin else None,
             created_at=tm.team.created_at,
             role=tm.role,
         )

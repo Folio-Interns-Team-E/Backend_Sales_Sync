@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime
+from sqlalchemy import Column, String, DateTime, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -24,6 +24,11 @@ class Team(Base):
         unique=True,
         nullable=False,
         default=lambda: secrets.token_urlsafe(8)
+    )
+    invite_code_expires_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("(now() + interval '30 days')"),
     )
     
 
