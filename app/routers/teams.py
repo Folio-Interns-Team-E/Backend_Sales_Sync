@@ -4,7 +4,7 @@ from uuid import UUID
 from app.database import get_db
 from app.schemas.teams import TeamCreate, TeamUpdate, TeamResponse, InviteRequest, UpdateRoleRequest, JoinTeamRequest, UserTeamResponse
 from app.schemas.common import ApiResponse
-from app.services.teams_service import create_team, get_team, update_team, delete_team, invite_member, update_member_role, remove_member, join_existing_team, get_team_invite_code, get_user_teams
+from app.services.teams_service import create_team, get_team, update_team, delete_team, invite_member, update_member_role, remove_member, join_existing_team, get_team_invite_code, get_user_teams, rotate_team_invite_code
 from app.middleware.auth_middleware import get_current_user, require_role
 from app.models.team_member import MemberRole
 from app.models.user import User
@@ -130,3 +130,17 @@ async def get_invite_code(
     _ensure_target_team(team_id, _team_ctx)
     invite_code = await get_team_invite_code(team_id, current_user, db)
     return ApiResponse(success=True, message="Invite code fetched successfully", data=invite_code)
+
+
+@router.post("/{team_id}/invite-code/rotate", response_model=ApiResponse[dict])
+async def rotate_invite_code(
+    team_id: UUID,
+    current_user: User = Depends(get_current_user),
+    team_ctx = Depends(require_role(MemberRole.admin)),
+    db: AsyncSession = Depends(get_db),
+):
+    _ensure_target_team(team_id, team_ctx)
+    if getattr(current_user, "_api_key_team_id", None):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A signed-in browser session is required")
+    data = await rotate_team_invite_code(team_id, current_user, db)
+    return ApiResponse(success=True, message="Invite code rotated", data=data)

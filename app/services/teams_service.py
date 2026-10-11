@@ -4,6 +4,7 @@ from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 from uuid import UUID
 import logging
+import secrets
 import resend
 from app.models.user import User
 from app.models.team import Team
@@ -15,6 +16,7 @@ from app.schemas.teams import (
     UserTeamResponse, TeamUpdate
 )
 from app.config import settings
+from app.services.audit_service import record_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +329,20 @@ async def get_team_invite_code(
 
     data = {"invite_code": team.invite_code}
     return data
+
+
+async def rotate_team_invite_code(team_id: UUID, current_user: User, db: AsyncSession) -> dict:
+    _require_role(
+        await _get_membership(current_user.id, team_id, db),
+        MemberRole.admin,
+    )
+    team = await db.scalar(select(Team).where(Team.id == team_id).with_for_update())
+    if team is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    team.invite_code = secrets.token_urlsafe(18)
+    record_audit_event(db, team_id, current_user.id, "workspace.invite_code_rotated", "team", team_id)
+    await db.commit()
+    return {"invite_code": team.invite_code}
 
 
 async def check_user_has_team(user_id: UUID, db: AsyncSession) -> bool:
