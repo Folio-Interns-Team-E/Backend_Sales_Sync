@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -78,6 +78,7 @@ async def test_invitation_targets_selected_team_only() -> None:
     get_team = AsyncMock(return_value=team)
     send_email = AsyncMock()
 
+    db = SimpleNamespace(add=Mock(), commit=AsyncMock())
     with (
         patch("app.services.teams_service._get_membership", new=get_membership),
         patch("app.services.teams_service._get_team_with_members", new=get_team),
@@ -87,10 +88,11 @@ async def test_invitation_targets_selected_team_only() -> None:
             team_id,
             payload,
             actor,
-            SimpleNamespace(),
+            db,
         )
 
     get_membership.assert_awaited_once_with(actor.id, team_id, ANY)
     get_team.assert_awaited_once_with(team_id, ANY)
     assert response.id == team_id
     assert response.invite_code == "selected-team-code"
+    db.commit.assert_awaited_once()

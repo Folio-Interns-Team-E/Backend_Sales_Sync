@@ -196,6 +196,8 @@ async def invite_member(
         invite_code=team.invite_code,
         inviter_name=current_user.full_name
     )
+    record_audit_event(db, team_id, current_user.id, "workspace.invitation_sent", "team", team_id)
+    await db.commit()
 
     return _build_team_response(
         team,
@@ -232,6 +234,7 @@ async def join_existing_team(
         role=MemberRole.rep
     )
     db.add(membership)
+    record_audit_event(db, team.id, current_user.id, "workspace.member_joined", "user", current_user.id)
     await db.commit()
 
     team = await _get_team_with_members(team.id, db)
@@ -264,7 +267,9 @@ async def update_member_role(
             detail="You cannot change your own role"
         )
 
-    target.role = payload.role
+    if target.role != payload.role:
+        target.role = payload.role
+        record_audit_event(db, team_id, current_user.id, "workspace.member_role_changed", "user", user_id)
     await db.commit()
 
     team = await _get_team_with_members(team_id, db)
@@ -297,7 +302,14 @@ async def remove_member(
             detail="You cannot remove yourself from the team"
         )
 
+    if membership.role == MemberRole.manager and target.role != MemberRole.rep:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Managers can remove sales reps only",
+        )
+
     await db.delete(target)
+    record_audit_event(db, team_id, current_user.id, "workspace.member_removed", "user", user_id)
     await db.commit()
 
     team = await _get_team_with_members(team_id, db)
@@ -373,7 +385,9 @@ async def update_team(
         )
 
     if payload.name is not None:
-        team.name = payload.name
+        if team.name != payload.name:
+            team.name = payload.name
+            record_audit_event(db, team_id, current_user.id, "workspace.renamed", "team", team_id)
     await db.commit()
 
     team = await _get_team_with_members(team_id, db)
