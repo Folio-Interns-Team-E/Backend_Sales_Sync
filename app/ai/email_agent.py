@@ -18,6 +18,20 @@ class EmailAgent:
     BASE_URL = "https://api.groq.com/openai/v1"
     MODEL = "openai/gpt-oss-120b"
 
+    DRAFT_FORMAT = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "outreach_email",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"subject": {"type": "string"}, "body": {"type": "string"}},
+                "required": ["subject", "body"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
     def _extract_json(self, text: str) -> dict:
         """
         Helper method to extract and parse the first valid JSON object from raw LLM output,
@@ -99,8 +113,9 @@ class EmailAgent:
                 {"role": "user", "content": message or "Generate the email draft json object."} # Explicitly requesting "json" prevents API 400 errors
             ],
             "temperature": 0.3,
-            "max_tokens": 350,
-            "response_format": {"type": "json_object"}
+            "max_completion_tokens": 1024,
+            "reasoning_effort": "low",
+            "response_format": self.DRAFT_FORMAT,
         }
 
         async with httpx.AsyncClient(timeout=30) as client:
@@ -112,6 +127,17 @@ class EmailAgent:
                 },
                 json=payload,
             )
+            if response.is_error:
+                try:
+                    provider_error = response.json().get("error", {})
+                    error_detail = {
+                        "type": provider_error.get("type"),
+                        "code": provider_error.get("code"),
+                        "message": str(provider_error.get("message", ""))[:500],
+                    }
+                except (ValueError, AttributeError):
+                    error_detail = {"type": "unparseable_provider_error"}
+                logger.error("Groq email draft rejected: status=%s error=%s", response.status_code, error_detail)
             response.raise_for_status()
             data = response.json()
             content = data["choices"][0]["message"]["content"].strip()
@@ -176,7 +202,8 @@ class EmailAgent:
                 {"role": "user", "content": message or "Evaluate the email draft and return a json evaluation."} # Explicitly requesting "json" prevents API 400 errors
             ],
             "temperature": 0.0,
-            "max_tokens": 250,
+            "max_completion_tokens": 1024,
+            "reasoning_effort": "low",
             "response_format": {"type": "json_object"}
         }
 
