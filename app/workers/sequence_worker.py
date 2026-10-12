@@ -4,7 +4,7 @@ import os
 
 from app.database import SessionLocal
 from app.services.sequence_delivery_service import process_due_enrollments
-from app.services.inbound_email_service import detect_sequence_replies_and_bounces
+from app.services.inbound_email_service import detect_sequence_replies_and_bounces, detect_outreach_replies
 from app.core.observability import configure_logging
 from app.core.worker_health import record_sequence_worker_heartbeat
 
@@ -23,6 +23,9 @@ async def run() -> None:
                 inbound = await detect_sequence_replies_and_bounces(db, batch_size)
                 if inbound["checked"]:
                     logger.info("Sequence inbox batch: %s", inbound)
+                outreach = await detect_outreach_replies(db, batch_size)
+                if outreach["checked"]:
+                    logger.info("Outreach inbox batch: %s", outreach)
                 result = await process_due_enrollments(db, batch_size)
                 if result["claimed"]:
                     logger.info("Sequence delivery batch: %s", result)

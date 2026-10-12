@@ -55,12 +55,12 @@ async def send_email(
     team_ctx: TeamContext = Depends(get_team_context),
 ):
     service = EmailService(db)
-    email = await service.create_email(team_ctx.team_id, payload.lead_id, payload.subject, payload.body, payload.tone)
+    email = await service.create_email(team_ctx.team_id, payload.lead_id, payload.subject, payload.body, payload.tone, current_user.id)
 
     background_tasks.add_task(
         send_email_in_background,
         current_user.id,
-        payload.lead_id,
+        email.id,
         payload.subject,
         payload.body,
     )

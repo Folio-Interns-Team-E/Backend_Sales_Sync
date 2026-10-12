@@ -38,7 +38,7 @@ class EmailService:
         return data
 
     async def create_email(self, team_id: UUID, lead_id: UUID, subject: str,
-                           body: str, tone: str = "Professional"):
+                           body: str, tone: str = "Professional", sender_id: UUID | None = None):
         result = await self.db.execute(
             select(Lead).where(Lead.id == lead_id, Lead.team_id == team_id)
         )
@@ -51,7 +51,7 @@ class EmailService:
             subject=subject,
             body=body,
             status=EmailStatus.SENT,
-            ai_metadata={"tone": tone},
+            ai_metadata={"tone": tone, **({"sender_user_id": str(sender_id)} if sender_id else {})},
         )
         self.db.add(email)
 

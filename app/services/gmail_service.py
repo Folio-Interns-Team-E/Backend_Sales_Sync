@@ -17,6 +17,7 @@ from app.core.redis import get_redis
 from app.database import SessionLocal
 from app.models.google_credentials import GoogleCredentials
 from app.models.lead import Lead
+from app.models.email import Email
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,18 @@ async def search_gmail_messages(refresh_token: str, query: str, max_results: int
         return response.json().get("messages", [])
 
 
+async def get_gmail_thread_id(refresh_token: str, message_id: str) -> str | None:
+    access_token = await refresh_access_token(refresh_token)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{GMAIL_MESSAGES_URL}/{message_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"format": "minimal"},
+        )
+        response.raise_for_status()
+        return response.json().get("threadId")
+
+
 async def send_email_on_behalf_of_user(
     db: AsyncSession,
     user_id: UUID,
@@ -150,23 +163,27 @@ async def send_email_on_behalf_of_user(
 
 async def send_email_in_background(
     user_id: UUID,
-    lead_id: UUID,
+    email_id: UUID,
     subject: str,
     body: str,
 ) -> None:
     try:
         async with SessionLocal() as db:
             result = await db.execute(
-                select(Lead).where(Lead.id == lead_id)
+                select(Email, Lead).join(Lead, Lead.id == Email.lead_id).where(Email.id == email_id)
             )
-            lead = result.scalar_one_or_none()
+            row = result.one_or_none()
+            email, lead = row if row else (None, None)
             if not lead or not lead.email:
-                logger.warning(f"Lead {lead_id} not found or has no email")
+                logger.warning("Email %s has no reachable lead", email_id)
                 return
 
-            await send_email_on_behalf_of_user(
+            provider_message_id = await send_email_on_behalf_of_user(
                 db, user_id, lead.email, subject, body,
             )
+            if provider_message_id:
+                email.ai_metadata = {**(email.ai_metadata or {}), "provider_message_id": provider_message_id}
+                await db.commit()
             logger.info(f"Gmail sent to {lead.email} for user {user_id}")
     except Exception as e:
         logger.error(f"Background Gmail send failed for user {user_id}: {e}")
