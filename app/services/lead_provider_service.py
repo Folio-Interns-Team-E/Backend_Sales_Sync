@@ -14,16 +14,16 @@ async def get_provider(db: AsyncSession, team_id: UUID, provider: str = "apollo"
     ))).scalar_one_or_none()
 
 
-async def save_provider(db: AsyncSession, team_id: UUID, api_key: str, monthly_limit: int):
+async def save_provider(db: AsyncSession, team_id: UUID, api_key: str, monthly_limit: int, provider: str = "apollo"):
     if not api_key.strip():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "API key is required")
-    record = await get_provider(db, team_id)
+    record = await get_provider(db, team_id, provider)
     if record:
         record.encrypted_api_key = encrypt_key(api_key.strip())
         record.monthly_limit = monthly_limit
     else:
         record = LeadProviderCredential(
-            team_id=team_id, provider="apollo", encrypted_api_key=encrypt_key(api_key.strip()),
+            team_id=team_id, provider=provider, encrypted_api_key=encrypt_key(api_key.strip()),
             monthly_limit=monthly_limit, used_this_month=0, usage_month=date.today().replace(day=1),
         )
         db.add(record)

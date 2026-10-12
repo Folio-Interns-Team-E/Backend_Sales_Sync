@@ -10,9 +10,69 @@ from app.services.leads_service import LeadService
 from app.services.lead_generation_service import LeadGenerationService
 from app.services.lead_import_service import LeadImportService
 from app.services.lead_provider_service import get_provider, reset_usage_if_needed, save_provider
+from app.services.hunter_service import HunterService
+from pydantic import BaseModel, Field
 from app.models.team_member import MemberRole
 
 router = APIRouter(prefix="/leads", tags=["leads"])
+
+
+class HunterKeyInput(BaseModel):
+    api_key: str = Field(min_length=8, max_length=500)
+    monthly_limit: int = Field(default=50, ge=1, le=1000)
+
+
+class HunterDiscoverInput(BaseModel):
+    query: str = Field(min_length=3, max_length=500)
+
+
+class HunterRevealInput(BaseModel):
+    domains: list[str] = Field(min_length=1, max_length=3)
+
+
+@router.get("/hunter/provider", response_model=ApiResponse[LeadProviderStatus])
+async def hunter_status(db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    record = await get_provider(db, team_ctx.team_id, "hunter")
+    if record:
+        reset_usage_if_needed(record)
+        await db.commit()
+    return ApiResponse(success=True, message="Hunter status", data=LeadProviderStatus(
+        provider="hunter", connected=bool(record), monthly_limit=record.monthly_limit if record else 50,
+        used_this_month=record.used_this_month if record else 0))
+
+
+@router.put("/hunter/provider", response_model=ApiResponse[LeadProviderStatus])
+async def configure_hunter(payload: HunterKeyInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    if team_ctx.role not in {MemberRole.admin, MemberRole.manager}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can configure Hunter")
+    record = await save_provider(db, team_ctx.team_id, payload.api_key, payload.monthly_limit, "hunter")
+    return ApiResponse(success=True, message="Hunter key saved securely", data=LeadProviderStatus(
+        provider="hunter", connected=True, monthly_limit=record.monthly_limit, used_this_month=record.used_this_month))
+
+
+@router.delete("/hunter/provider", response_model=ApiResponse[dict])
+async def disconnect_hunter(db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    if team_ctx.role not in {MemberRole.admin, MemberRole.manager}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can configure Hunter")
+    record = await get_provider(db, team_ctx.team_id, "hunter")
+    if record:
+        await db.delete(record)
+        await db.commit()
+    return ApiResponse(success=True, message="Hunter disconnected", data={})
+
+
+@router.post("/hunter/discover", response_model=ApiResponse[list[dict]])
+async def hunter_discover(payload: HunterDiscoverInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    companies = await HunterService(db).discover(team_ctx.team_id, payload.query)
+    return ApiResponse(success=True, message="Companies found", data=companies)
+
+
+@router.post("/hunter/reveal", response_model=ApiResponse[LeadGenerateResponse])
+async def hunter_reveal(payload: HunterRevealInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    leads, skipped = await HunterService(db).reveal(team_ctx.team_id, payload.domains)
+    return ApiResponse(success=True, message=f"Imported {len(leads)} Hunter contacts", data=LeadGenerateResponse(
+        created=len(leads), skipped_duplicates=skipped,
+        leads=[LeadListResponse.model_validate(lead) for lead in leads]))
 
 
 @router.get("/provider", response_model=ApiResponse[LeadProviderStatus])
