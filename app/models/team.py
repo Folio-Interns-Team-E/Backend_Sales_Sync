@@ -58,5 +58,4 @@ class Team(Base):
     chats = relationship("Chat", back_populates="team", cascade="all, delete-orphan")
 
     google_credentials = relationship("GoogleCredentials", back_populates="team", cascade="all, delete-orphan")
-    calcom_integrations = relationship("CalComIntegration", back_populates="team", cascade="all, delete-orphan")
     opportunities = relationship("Opportunity", back_populates="team", cascade="all, delete-orphan")

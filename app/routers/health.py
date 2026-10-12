@@ -29,11 +29,11 @@ async def check_database():
             SELECT u.id, u.company, u.job_title, u.session_version,
                    oi.subject, se.id, ae.id, sne.id, sne.reply_override,
                    n.id, wak.id, gc.encrypted_refresh_token,
-                   ci.encrypted_access_token
+                   gcc.encrypted_refresh_token
             FROM users AS u, oauth_identities AS oi, security_events AS se,
                  audit_events AS ae, sequence_enrollments AS sne,
                  notifications AS n, workspace_api_keys AS wak,
-                 google_credentials AS gc, calcom_integrations AS ci
+                 google_credentials AS gc, google_calendar_credentials AS gcc
             LIMIT 0
         """))
         versions = await connection.execute(text("SELECT version_num FROM alembic_version"))

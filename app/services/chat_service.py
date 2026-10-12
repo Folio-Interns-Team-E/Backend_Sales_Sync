@@ -13,7 +13,6 @@ from sqlalchemy import desc
 from app.models.lead import Lead, LeadStatus
 from app.models.meeting import Meeting, MeetingStatus
 from app.services.chat_agents import ChatAgentsService
-from app.services.calcom_service import CalComService
 from app.ai.meeting_agent import MeetingAgent
 from app.ai.proposal_evaluator import ProposalEvaluatorAgent
 from app.ai.lead_analyzer import LeadAnalyzerAgent

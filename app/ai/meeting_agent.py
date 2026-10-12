@@ -12,7 +12,6 @@ from sqlalchemy import select, or_, cast, String
 from app.config import settings
 from app.models.lead import Lead
 from app.models.meeting import Meeting, MeetingStatus
-from app.services.calcom_service import CalComService
 from app.services.meetings_service import MeetingService
 from app.services.google_calendar_service import delete_calendar_meeting
 
@@ -242,8 +241,7 @@ class MeetingAgent:
                 active_meeting.status = MeetingStatus.CANCELLED.value
                 await self.db.commit()
             else:
-                cal_service = CalComService(self.db, lead.team_id)
-                await cal_service.cancel_booking(booking_uid=active_meeting.calendar_event_id, meeting_id=active_meeting.id)
+                return "This legacy meeting was booked outside Google Calendar. Cancel it with the original provider; SalesSync cannot cancel it remotely."
 
             meeting_time_str = f"{active_meeting.date} {active_meeting.time}"
             return (
@@ -253,5 +251,5 @@ class MeetingAgent:
                 f"and marked as `{MeetingStatus.CANCELLED.value}` locally."
             )
         except Exception as e:
-            logger.error(f"CalCom booking cancellation failed: {e}", exc_info=True)
+            logger.error("Meeting cancellation failed: %s", e, exc_info=True)
             return f"Failed to cancel meeting: {str(e)}"

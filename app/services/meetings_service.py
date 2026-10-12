@@ -98,6 +98,8 @@ class MeetingService:
                               timezone: Optional[str] = None,
                               calendar_event_id: Optional[str] = None):
         meeting = await self.get_meeting(meeting_id, team_id)
+        if meeting.calendar_provider != "google" and meeting.calendar_event_id and status == "Cancelled":
+            raise HTTPException(status.HTTP_409_CONFLICT, "Cancel this legacy meeting with its original provider")
         if meeting.calendar_provider == "google" and any(value is not None for value in (meeting_date, meeting_time, timezone, calendar_event_id)):
             raise HTTPException(status.HTTP_409_CONFLICT, "Rescheduling Google Calendar meetings is not available yet; cancel and create a new meeting")
         if meeting.calendar_provider == "google" and status == "Cancelled":
@@ -122,6 +124,8 @@ class MeetingService:
 
     async def delete_meeting(self, meeting_id: UUID, team_id: UUID):
         meeting = await self.get_meeting(meeting_id, team_id)
+        if meeting.calendar_provider != "google" and meeting.calendar_event_id:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Cancel this legacy meeting with its original provider before deleting it")
         if meeting.calendar_provider == "google" and meeting.calendar_event_id:
             await delete_calendar_meeting(self.db, meeting.created_by, meeting.calendar_event_id)
         await self.db.delete(meeting)
