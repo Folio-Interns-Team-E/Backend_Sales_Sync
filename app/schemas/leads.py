@@ -42,6 +42,7 @@ class LeadResponse(BaseModel):
     status: str
     reasoning: Optional[str] = None
     pool_origin_id: Optional[UUID] = None
+    crm_contact_id: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
 
@@ -62,6 +63,7 @@ class LeadResponse(BaseModel):
             "reasoning": (obj.ai_context_data or {}).get("reasoning") if hasattr(obj, "ai_context_data") else None,
             "evaluation_justification": (obj.ai_context_data or {}).get("evaluation_justification") if hasattr(obj, "ai_context_data") else None,
             "pool_origin_id": getattr(obj, "pool_origin_id", None),
+            "crm_contact_id": getattr(obj, "crm_contact_id", None),
             "created_at": obj.created_at,
             "updated_at": obj.updated_at,
         }
@@ -80,6 +82,7 @@ class LeadListResponse(BaseModel):
     reasoning: Optional[str] = None
     evaluation_justification: Optional[str] = None
     pool_origin_id: Optional[UUID] = None
+    crm_contact_id: Optional[UUID] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -98,6 +101,7 @@ class LeadListResponse(BaseModel):
             "reasoning": (obj.ai_context_data or {}).get("reasoning") if hasattr(obj, "ai_context_data") else None,
             "evaluation_justification": (obj.ai_context_data or {}).get("evaluation_justification") if hasattr(obj, "ai_context_data") else None,
             "pool_origin_id": getattr(obj, "pool_origin_id", None),
+            "crm_contact_id": getattr(obj, "crm_contact_id", None),
             "created_at": obj.created_at,
         }
         return super().model_validate(data)

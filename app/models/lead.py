@@ -32,6 +32,7 @@ class Lead(Base):
     # Core UI & Query Columns
     name = Column(String, nullable=False, index=True)
     email = Column(String, nullable=False, index=True)
+    crm_contact_id = Column(UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True, index=True)
     status = Column(String, default=LeadStatus.NEW.value, nullable=False, index=True)
     company_name = Column(String, nullable=True, index=True)
     job_title = Column(String, nullable=True)

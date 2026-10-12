@@ -15,8 +15,21 @@ from app.models.team_member import MemberRole, TeamMember
 from app.models.user import User
 from app.schemas.common import ApiResponse
 from app.schemas.crm import AccountPayload, AccountResponse, AccountUpdate, ContactPayload, ContactResponse, ContactUpdate, SearchResult, TaskPayload, TaskResponse, TaskUpdate
+from app.services.crm_conversion_service import convert_lead, contact_context
 
 router = APIRouter(prefix="/crm", tags=["crm"])
+
+
+@router.post("/prospects/{lead_id}/convert", response_model=ApiResponse[dict])
+async def convert_prospect(lead_id: UUID, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
+    result = await convert_lead(db, team_ctx.team_id, user.id, lead_id)
+    return ApiResponse(success=True, message="Prospect linked to CRM", data=result)
+
+
+@router.get("/contacts/{contact_id}/context", response_model=ApiResponse[dict])
+async def get_contact_context(contact_id: UUID, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
+    result = await contact_context(db, team_ctx.team_id, contact_id)
+    return ApiResponse(success=True, message="Contact context fetched", data=result)
 
 
 async def ensure_member(db: AsyncSession, team_id: UUID, user_id: Optional[UUID]):
