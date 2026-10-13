@@ -10,11 +10,14 @@ from app.routers import social_auth
 from app.routers import security_activity
 from app.routers import health as health_router
 from app.models import team, user
-from app.core.observability import configure_logging, request_observability
+from app.core.observability import configure_error_tracking, configure_logging, request_observability
 import logging
+import sentry_sdk
 
 configure_logging()
+error_tracking_enabled = configure_error_tracking()
 logger = logging.getLogger(__name__)
+logger.info("error_tracking enabled=%s", error_tracking_enabled)
 
 app = FastAPI(
     title="AI Sales Pipeline Agent",
@@ -29,7 +32,8 @@ app.add_middleware(
     allow_origins=settings.frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID", "Retry-After"],
 )
 app.middleware("http")(request_observability)
 
@@ -59,6 +63,8 @@ app.include_router(api_keys.router)
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    if exc.status_code >= 500:
+        sentry_sdk.capture_exception(exc)
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -87,6 +93,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled application error")
+    sentry_sdk.capture_exception(exc)
     return JSONResponse(
         status_code=500,
         content={

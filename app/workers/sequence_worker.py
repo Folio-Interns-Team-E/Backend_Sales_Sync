@@ -2,13 +2,16 @@ import asyncio
 import logging
 import os
 
+import sentry_sdk
+
 from app.database import SessionLocal
 from app.services.sequence_delivery_service import process_due_enrollments
 from app.services.inbound_email_service import detect_sequence_replies_and_bounces, detect_outreach_replies
-from app.core.observability import configure_logging
+from app.core.observability import configure_error_tracking, configure_logging
 from app.core.worker_health import record_sequence_worker_heartbeat
 
 configure_logging()
+configure_error_tracking()
 logger = logging.getLogger(__name__)
 
 
@@ -31,9 +34,10 @@ async def run() -> None:
                     logger.info("Sequence delivery batch: %s", result)
             await record_sequence_worker_heartbeat(interval)
             consecutive_failures = 0
-        except Exception:
+        except Exception as exc:
             consecutive_failures += 1
             logger.exception("Sequence worker batch failed")
+            sentry_sdk.capture_exception(exc)
             if consecutive_failures >= 3:
                 logger.critical("Sequence worker stopped after three consecutive failed batches")
                 raise

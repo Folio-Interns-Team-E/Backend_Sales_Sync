@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     upstash_redis_rest_token: str = ""
     rate_limit_trust_proxy_headers: bool = False
 
+    # observability (optional)
+    sentry_dsn: str = ""
+    sentry_environment: str = ""
+    sentry_release: str = ""
+    sentry_traces_sample_rate: float = Field(default=0.1, ge=0, le=1)
+
     # stripe
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
