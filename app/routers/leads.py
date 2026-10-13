@@ -43,8 +43,6 @@ async def hunter_status(db: AsyncSession = Depends(get_db), team_ctx: TeamContex
 
 @router.put("/hunter/provider", response_model=ApiResponse[LeadProviderStatus])
 async def configure_hunter(payload: HunterKeyInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
-    if team_ctx.role not in {MemberRole.admin, MemberRole.manager}:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can configure Hunter")
     record = await save_provider(db, team_ctx.team_id, payload.api_key, payload.monthly_limit, "hunter")
     return ApiResponse(success=True, message="Hunter key saved securely", data=LeadProviderStatus(
         provider="hunter", connected=True, monthly_limit=record.monthly_limit, used_this_month=record.used_this_month))
@@ -52,8 +50,6 @@ async def configure_hunter(payload: HunterKeyInput, db: AsyncSession = Depends(g
 
 @router.delete("/hunter/provider", response_model=ApiResponse[dict])
 async def disconnect_hunter(db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
-    if team_ctx.role not in {MemberRole.admin, MemberRole.manager}:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins and managers can configure Hunter")
     record = await get_provider(db, team_ctx.team_id, "hunter")
     if record:
         await db.delete(record)
