@@ -26,6 +26,14 @@ from app.middleware.csrf import require_auth_request
 from app.middleware.auth_middleware import get_current_user
 from app.models.security_event import SecurityAction
 from app.services.security_activity import record_security_event
+from app.middleware.rate_limit import (
+    AUTH_LOGIN,
+    AUTH_OTP,
+    AUTH_PASSWORD_RESET,
+    AUTH_REFRESH,
+    AUTH_REGISTER,
+    rate_limit,
+)
 
 #router init (auth grouping)
 router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[Depends(require_auth_request)])
@@ -55,14 +63,14 @@ async def update_profile(
     return ApiResponse(success=True, message="Profile updated", data=ProfileResponse.model_validate(current_user))
 
 
-@router.post("/password/request", response_model=ApiResponse[dict])
+@router.post("/password/request", response_model=ApiResponse[dict], dependencies=[Depends(rate_limit(AUTH_PASSWORD_RESET, "ip"))])
 async def request_password_reset(payload: PasswordResetRequest, request: Request,
                                  background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     await request_reset(str(payload.email), request.client.host if request.client else "unknown", background_tasks, db)
     return ApiResponse(success=True, message="If an account exists, a recovery code will be sent to your email.", data={})
 
 
-@router.post("/password/reset", response_model=ApiResponse[dict])
+@router.post("/password/reset", response_model=ApiResponse[dict], dependencies=[Depends(rate_limit(AUTH_PASSWORD_RESET, "ip"))])
 async def reset_password(payload: PasswordResetConfirm, response: Response, db: AsyncSession = Depends(get_db)):
     await confirm_reset(payload.token, payload.password, db)
     _clear_refresh_cookie(response)
@@ -94,13 +102,13 @@ def _clear_refresh_cookie(response: Response) -> None:
     )
 
 #register user endpoint
-@router.post("/register", response_model=ApiResponse[RegisterResponse], status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=ApiResponse[RegisterResponse], status_code=status.HTTP_201_CREATED, dependencies=[Depends(rate_limit(AUTH_REGISTER, "ip"))])
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
     token = await register_user(payload, db)
     return ApiResponse(success=True, message="Account created successfully. Please verify your email.", data=token)
 
 #login endpoint
-@router.post("/login", response_model=ApiResponse[LoginResponse])
+@router.post("/login", response_model=ApiResponse[LoginResponse], dependencies=[Depends(rate_limit(AUTH_LOGIN, "ip"))])
 async def login(
     payload: LoginRequest,
     request: Request,
@@ -125,7 +133,7 @@ async def login(
         data=result
     )
 
-@router.post("/refresh", response_model=ApiResponse[LoginResponse])
+@router.post("/refresh", response_model=ApiResponse[LoginResponse], dependencies=[Depends(rate_limit(AUTH_REFRESH, "ip"))])
 async def refresh_session(
     response: Response,
     refresh_token: str | None = Cookie(default=None),
@@ -207,7 +215,7 @@ async def logout_all(
     return response
 
 
-@router.post("/otp/request", response_model=ApiResponse[dict])
+@router.post("/otp/request", response_model=ApiResponse[dict], dependencies=[Depends(rate_limit(AUTH_OTP, "ip"))])
 async def request_otp(payload: OTPRequest, db: AsyncSession = Depends(get_db)):
     await request_otp_service(payload, db)
     return ApiResponse(
@@ -216,7 +224,7 @@ async def request_otp(payload: OTPRequest, db: AsyncSession = Depends(get_db)):
         data={}
     )
 
-@router.post("/otp/verify", response_model=ApiResponse[dict])
+@router.post("/otp/verify", response_model=ApiResponse[dict], dependencies=[Depends(rate_limit(AUTH_OTP, "ip"))])
 async def verify_otp(payload: OTPVerifyRequest, db: AsyncSession = Depends(get_db)):
     await verify_otp_service(payload, db)
     return ApiResponse(

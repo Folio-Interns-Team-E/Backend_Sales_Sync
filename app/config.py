@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     redis_url: str = ""
     upstash_redis_rest_url: str = ""
     upstash_redis_rest_token: str = ""
+    rate_limit_trust_proxy_headers: bool = False
 
     # stripe
     stripe_secret_key: str = ""

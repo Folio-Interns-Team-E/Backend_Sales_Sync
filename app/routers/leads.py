@@ -13,6 +13,7 @@ from app.services.lead_provider_service import get_provider, reset_usage_if_need
 from app.services.hunter_service import HunterService
 from pydantic import BaseModel, Field
 from app.models.team_member import MemberRole
+from app.middleware.rate_limit import LEAD_DISCOVERY, LEAD_IMPORT, rate_limit
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -57,13 +58,13 @@ async def disconnect_hunter(db: AsyncSession = Depends(get_db), team_ctx: TeamCo
     return ApiResponse(success=True, message="Hunter disconnected", data={})
 
 
-@router.post("/hunter/discover", response_model=ApiResponse[list[dict]])
+@router.post("/hunter/discover", response_model=ApiResponse[list[dict]], dependencies=[Depends(rate_limit(LEAD_DISCOVERY, "user", "team"))])
 async def hunter_discover(payload: HunterDiscoverInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
     companies = await HunterService(db).discover(team_ctx.team_id, payload.query)
     return ApiResponse(success=True, message="Companies found", data=companies)
 
 
-@router.post("/hunter/reveal", response_model=ApiResponse[LeadGenerateResponse])
+@router.post("/hunter/reveal", response_model=ApiResponse[LeadGenerateResponse], dependencies=[Depends(rate_limit(LEAD_DISCOVERY, "user", "team"))])
 async def hunter_reveal(payload: HunterRevealInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context)):
     leads, skipped = await HunterService(db).reveal(team_ctx.team_id, payload.domains)
     return ApiResponse(success=True, message=f"Imported {len(leads)} Hunter contacts", data=LeadGenerateResponse(
@@ -100,7 +101,7 @@ async def disconnect_provider(db: AsyncSession = Depends(get_db), team_ctx: Team
     return ApiResponse(success=True, message="Apollo disconnected", data={})
 
 
-@router.post("/generate", response_model=ApiResponse[LeadGenerateResponse])
+@router.post("/generate", response_model=ApiResponse[LeadGenerateResponse], dependencies=[Depends(rate_limit(LEAD_DISCOVERY, "user", "team"))])
 async def generate_leads(
     payload: LeadGenerateRequest,
     db: AsyncSession = Depends(get_db),
@@ -115,7 +116,7 @@ async def generate_leads(
     return ApiResponse(success=True, message=f"Generated {len(leads)} Apollo leads", data=data)
 
 
-@router.post("/import", response_model=ApiResponse[LeadImportResponse])
+@router.post("/import", response_model=ApiResponse[LeadImportResponse], dependencies=[Depends(rate_limit(LEAD_IMPORT, "user", "team"))])
 async def import_leads(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),

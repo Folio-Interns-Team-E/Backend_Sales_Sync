@@ -12,6 +12,7 @@ from app.middleware.auth_middleware import get_current_user
 from app.core.security import create_refresh_token, session_claims
 from app.routers.auth import _set_refresh_cookie
 from app.services import social_auth as service
+from app.middleware.rate_limit import OAUTH_FLOW, rate_limit
 
 router = APIRouter(prefix="/auth/oauth", tags=["social sign-in"])
 Provider = Literal["google", "github"]
@@ -26,17 +27,17 @@ def start_response(provider, response, user=None):
     return {"data": {"url": url}}
 
 
-@router.post("/{provider}/start", dependencies=[Depends(require_auth_request)])
+@router.post("/{provider}/start", dependencies=[Depends(require_auth_request), Depends(rate_limit(OAUTH_FLOW, "ip"))])
 async def start(provider: Provider, response: Response):
     return start_response(provider, response)
 
 
-@router.post("/{provider}/link", dependencies=[Depends(require_auth_request)])
+@router.post("/{provider}/link", dependencies=[Depends(require_auth_request), Depends(rate_limit(OAUTH_FLOW, "user"))])
 async def link(provider: Provider, response: Response, user=Depends(get_current_user)):
     return start_response(provider, response, user)
 
 
-@router.get("/{provider}/callback")
+@router.get("/{provider}/callback", dependencies=[Depends(rate_limit(OAUTH_FLOW, "ip"))])
 async def callback(provider: Provider, request: Request, state: str = "", code: str = "", error: str = "",
                    db: AsyncSession = Depends(get_db)):
     target = settings.oauth_frontend_url.rstrip("/")

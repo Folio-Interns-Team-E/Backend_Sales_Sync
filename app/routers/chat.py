@@ -15,6 +15,7 @@ from app.schemas.chat import (
 )
 from app.schemas.common import ApiResponse
 from app.services.chat_service import ChatService
+from app.middleware.rate_limit import AI_CHAT, rate_limit
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -80,7 +81,7 @@ async def list_messages(
     return ApiResponse(success=True, message="Messages fetched", data=messages)
 
 
-@router.post("/chats/{chat_id}/messages", response_model=ApiResponse[ChatSendResponse])
+@router.post("/chats/{chat_id}/messages", response_model=ApiResponse[ChatSendResponse], dependencies=[Depends(rate_limit(AI_CHAT, "user", "team"))])
 async def chat(
     chat_id: UUID,
     payload: ChatRequest,

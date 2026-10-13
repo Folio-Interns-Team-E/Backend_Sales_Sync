@@ -18,6 +18,7 @@ from app.services.google_calendar_service import (
 )
 from app.services.gmail_service import begin_gmail_oauth, consume_gmail_oauth, exchange_authorization_code, fetch_google_email
 from app.config import settings
+from app.middleware.rate_limit import OAUTH_FLOW, rate_limit
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
 
-@router.get("/google-calendar/auth-url")
+@router.get("/google-calendar/auth-url", dependencies=[Depends(rate_limit(OAUTH_FLOW, "user"))])
 async def google_calendar_auth_url(response: Response, current_user: User = Depends(get_current_user)):
     state, binding = begin_calendar_oauth(current_user.id)
     params = {
@@ -42,7 +43,7 @@ async def google_calendar_auth_url(response: Response, current_user: User = Depe
     return {"success": True, "data": {"url": f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"}}
 
 
-@router.get("/google-calendar/callback")
+@router.get("/google-calendar/callback", dependencies=[Depends(rate_limit(OAUTH_FLOW, "ip"))])
 async def google_calendar_callback(request: Request, state: str = "", code: str = "", db: AsyncSession = Depends(get_db)):
     user_id = consume_calendar_oauth(state, request.cookies.get("calendar_oauth_binding"))
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
@@ -73,7 +74,7 @@ def gmail_success_redirect_url() -> str:
     return f"{settings.oauth_frontend_url.rstrip('/')}/settings?integration=success"
 
 
-@router.get("/gmail/auth-url")
+@router.get("/gmail/auth-url", dependencies=[Depends(rate_limit(OAUTH_FLOW, "user"))])
 async def gmail_auth_url(response: Response, current_user: User = Depends(get_current_user)):
     try:
         state, binding = begin_gmail_oauth(current_user.id)
@@ -94,7 +95,7 @@ async def gmail_auth_url(response: Response, current_user: User = Depends(get_cu
     return {"success": True, "data": {"url": url}}
 
 
-@router.get("/gmail/callback")
+@router.get("/gmail/callback", dependencies=[Depends(rate_limit(OAUTH_FLOW, "ip"))])
 async def gmail_callback(
     request: Request,
     code: str = Query(...),

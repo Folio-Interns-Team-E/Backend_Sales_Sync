@@ -8,6 +8,7 @@ from app.schemas.emails import EmailCreate, EmailUpdate, EmailResponse
 from app.schemas.common import ApiResponse
 from app.services.emails_service import EmailService
 from app.services.gmail_service import send_email_in_background
+from app.middleware.rate_limit import EMAIL_DRAFT, EMAIL_SEND, rate_limit
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 
@@ -46,7 +47,7 @@ async def list_emails(
     return ApiResponse(success=True, message="Emails fetched successfully", data=emails)
 
 
-@router.post("/", response_model=ApiResponse[EmailResponse], status_code=201)
+@router.post("/", response_model=ApiResponse[EmailResponse], status_code=201, dependencies=[Depends(rate_limit(EMAIL_SEND, "user", "team"))])
 async def send_email(
     payload: EmailCreate,
     background_tasks: BackgroundTasks,
@@ -68,7 +69,7 @@ async def send_email(
     return ApiResponse(success=True, message="Email sent successfully", data=email)
 
 
-@router.post("/draft", response_model=ApiResponse[EmailResponse], status_code=201)
+@router.post("/draft", response_model=ApiResponse[EmailResponse], status_code=201, dependencies=[Depends(rate_limit(EMAIL_DRAFT, "user", "team"))])
 async def draft_email(
     payload: EmailCreate,
     db: AsyncSession = Depends(get_db),
