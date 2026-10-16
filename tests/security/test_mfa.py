@@ -66,6 +66,32 @@ def test_recovery_code_is_single_use():
         assert not mfa_service.verify_user_code(account, code)
 
 
+async def test_authenticator_setup_round_trip_enables_mfa():
+    account = user(mfa_enabled=False, mfa_secret_encrypted=None)
+    redis = FakeRedis()
+    db = SimpleNamespace(add=Mock(), commit=AsyncMock())
+
+    with (
+        patch.object(mfa_service, "get_redis", return_value=redis),
+        patch.object(mfa_service, "encrypt_key", side_effect=lambda value: value),
+        patch.object(mfa_service, "decrypt_key", side_effect=lambda value: value),
+    ):
+        setup = await mfa_service.begin_setup(account)
+        response = await mfa_service.enable_mfa(
+            account,
+            pyotp.TOTP(setup.secret).now(),
+            db,
+        )
+
+    assert setup.otpauth_uri.startswith("otpauth://totp/SalesSync:")
+    assert "issuer=SalesSync" in setup.otpauth_uri
+    assert account.mfa_enabled is True
+    assert account.mfa_secret_encrypted == setup.secret
+    assert len(response.recovery_codes) == mfa_service.RECOVERY_CODE_COUNT
+    assert redis.get(mfa_service._setup_key(account.id)) is None
+    db.commit.assert_awaited_once()
+
+
 async def test_password_login_requires_mfa_before_tokens_are_issued():
     account = user()
     db = SimpleNamespace(execute=AsyncMock(return_value=result(account)))
