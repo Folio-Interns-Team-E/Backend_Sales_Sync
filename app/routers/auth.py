@@ -5,7 +5,11 @@ from app.schemas.auth import OTPRequest, OTPVerifyRequest
 from app.schemas.common import ApiResponse
 from app.services.auth_service import request_otp_service, verify_otp_service
 from app.database import get_db
-from app.schemas.auth import RegisterRequest, LoginRequest, RegisterResponse, LoginResponse, ProfileUpdate, ProfileResponse
+from app.schemas.auth import (
+    RegisterRequest, LoginRequest, RegisterResponse, LoginResponse, ProfileUpdate, ProfileResponse,
+    MfaCodeRequest, MfaDisableRequest, MfaLoginRequest, MfaRecoveryCodesResponse,
+    MfaSetupResponse, MfaStatusResponse,
+)
 from app.services.auth_service import register_user, login_user
 from app.models.user import User
 from app.core.security import (
@@ -28,15 +32,22 @@ from app.models.security_event import SecurityAction
 from app.services.security_activity import record_security_event
 from app.middleware.rate_limit import (
     AUTH_LOGIN,
+    AUTH_MFA,
     AUTH_OTP,
     AUTH_PASSWORD_RESET,
     AUTH_REFRESH,
     AUTH_REGISTER,
     rate_limit,
 )
+from app.services.mfa_service import begin_setup, complete_login, disable_mfa, enable_mfa, regenerate_recovery_codes
 
 #router init (auth grouping)
 router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[Depends(require_auth_request)])
+
+
+def require_browser_session(authorization: str | None = Header(default=None)) -> None:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=403, detail="A signed-in browser session is required")
 
 
 @router.get("/profile", response_model=ApiResponse[ProfileResponse])
@@ -118,10 +129,10 @@ async def login(
     client_ip = request.client.host if request.client else "unknown"
     result, refresh_token = await login_user(payload, db, client_ip=client_ip)
 
-    if result.needs_verification:
+    if result.needs_verification or result.needs_mfa:
         return ApiResponse(
             success=True,
-            message="Email not verified",
+            message="Email verification required" if result.needs_verification else "MFA verification required",
             data=result
         )
 
@@ -132,6 +143,47 @@ async def login(
         message="Login successful",
         data=result
     )
+
+
+@router.post("/mfa/challenge", response_model=ApiResponse[LoginResponse], dependencies=[Depends(rate_limit(AUTH_MFA, "ip"))])
+async def verify_mfa_login(payload: MfaLoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
+    result, refresh_token = await complete_login(payload.ticket, payload.code, db)
+    _set_refresh_cookie(response, refresh_token)
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse(success=True, message="Login successful", data=result)
+
+
+@router.get("/mfa", response_model=ApiResponse[MfaStatusResponse], dependencies=[Depends(require_browser_session)])
+async def mfa_status(response: Response, current_user: User = Depends(get_current_user)):
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse(success=True, message="MFA status", data=MfaStatusResponse(enabled=current_user.mfa_enabled))
+
+
+@router.post("/mfa/setup", response_model=ApiResponse[MfaSetupResponse], dependencies=[Depends(require_browser_session), Depends(rate_limit(AUTH_MFA, "user"))])
+async def setup_mfa(response: Response, current_user: User = Depends(get_current_user)):
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse(success=True, message="MFA setup started", data=await begin_setup(current_user))
+
+
+@router.post("/mfa/enable", response_model=ApiResponse[MfaRecoveryCodesResponse], dependencies=[Depends(require_browser_session), Depends(rate_limit(AUTH_MFA, "user"))])
+async def confirm_mfa(payload: MfaCodeRequest, response: Response, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse(success=True, message="MFA enabled", data=await enable_mfa(current_user, payload.code, db))
+
+
+@router.post("/mfa/recovery-codes", response_model=ApiResponse[MfaRecoveryCodesResponse], dependencies=[Depends(require_browser_session), Depends(rate_limit(AUTH_MFA, "user"))])
+async def replace_recovery_codes(payload: MfaCodeRequest, response: Response, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse(success=True, message="Recovery codes regenerated", data=await regenerate_recovery_codes(current_user, payload.code, db))
+
+
+@router.post("/mfa/disable", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_browser_session), Depends(rate_limit(AUTH_MFA, "user"))])
+async def remove_mfa(payload: MfaDisableRequest, response: Response, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await disable_mfa(current_user, payload.password, payload.code, db)
+    _clear_refresh_cookie(response)
+    response.headers["Cache-Control"] = "no-store"
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 @router.post("/refresh", response_model=ApiResponse[LoginResponse], dependencies=[Depends(rate_limit(AUTH_REFRESH, "ip"))])
 async def refresh_session(

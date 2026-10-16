@@ -27,6 +27,7 @@ async def check_database():
         # Keep this in one round trip: Railway and Neon may be far apart.
         await connection.execute(text("""
             SELECT u.id, u.company, u.job_title, u.session_version,
+                   u.mfa_enabled, u.mfa_secret_encrypted, u.mfa_recovery_code_hashes,
                    oi.subject, se.id, ae.id, sne.id, sne.reply_override,
                    n.id, wak.id, gc.encrypted_refresh_token,
                    gcc.encrypted_refresh_token

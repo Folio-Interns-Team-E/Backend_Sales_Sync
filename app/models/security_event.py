@@ -17,6 +17,10 @@ class SecurityAction(str, enum.Enum):
     google_linked = "google_linked"
     github_linked = "github_linked"
     logout_all = "logout_all"
+    mfa_enabled = "mfa_enabled"
+    mfa_disabled = "mfa_disabled"
+    mfa_login = "mfa_login"
+    mfa_recovery_regenerated = "mfa_recovery_regenerated"
 
 
 class SecurityEvent(Base):

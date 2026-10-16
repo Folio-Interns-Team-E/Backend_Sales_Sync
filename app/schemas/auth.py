@@ -82,6 +82,8 @@ class TokenResponse(BaseModel):
 
 class LoginResponse(BaseModel):
     needs_verification: bool = False
+    needs_mfa: bool = False
+    mfa_ticket: str | None = None
     email: str | None = None
     access_token: str | None = None
     token_type: str = "bearer"
@@ -103,3 +105,34 @@ class OTPRequest(BaseModel):
 class OTPVerifyRequest(BaseModel):
     email: EmailStr
     otp: str
+
+
+class MfaCodeRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=32)
+
+
+class MfaLoginRequest(MfaCodeRequest):
+    ticket: str = Field(min_length=32, max_length=128)
+
+
+class MfaDisableRequest(MfaCodeRequest):
+    password: str = Field(min_length=1, max_length=72)
+
+    @field_validator("password")
+    @classmethod
+    def password_must_fit_bcrypt(cls, password: str) -> str:
+        return validate_bcrypt_password(password)
+
+
+class MfaStatusResponse(BaseModel):
+    enabled: bool
+
+
+class MfaSetupResponse(BaseModel):
+    secret: str
+    otpauth_uri: str
+    expires_in: int
+
+
+class MfaRecoveryCodesResponse(BaseModel):
+    recovery_codes: list[str]

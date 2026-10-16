@@ -10,7 +10,7 @@ from app.serve import server_options
 
 
 def test_readiness_uses_deployed_migration_files():
-    assert health.expected_migration_heads() == {"20261012_lead_crm_contact"}
+    assert health.expected_migration_heads() == {"20261016_account_mfa"}
 
 
 @pytest.mark.parametrize("scheme", ["postgres", "postgresql", "postgresql+asyncpg"])
@@ -99,4 +99,5 @@ async def test_database_readiness_requires_current_migration(database_heads, rea
     assert len(statements) == 2
     assert "gc.encrypted_refresh_token" in statements[0]
     assert "gcc.encrypted_refresh_token" in statements[0]
+    assert "u.mfa_secret_encrypted" in statements[0]
     assert "SELECT version_num FROM alembic_version" in statements

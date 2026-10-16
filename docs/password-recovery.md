@@ -13,4 +13,4 @@ New sessions contain a keyed fingerprint of the stored password hash. Both acces
 
 The IP limit uses the ASGI request client. Configure trusted proxy forwarding in the deployment so that public clients cannot spoof this value. Multiple users behind one address share its request limit.
 
-Remaining identity work: MFA enrollment and recovery, organization SSO/SCIM, cross-site cookie configuration with CSRF protection, session/device management, and security audit events.
+Remaining identity work: organization SSO/SCIM and per-device session management. Authenticator MFA, recovery codes, cross-site request protection, account-wide session revocation, and security activity are implemented.

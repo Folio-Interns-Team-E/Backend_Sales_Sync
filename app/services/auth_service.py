@@ -21,6 +21,7 @@ from app.schemas.auth import OTPRequest, OTPVerifyRequest
 from app.core.redis import get_redis
 from app.services.security_activity import record_security_event
 from app.models.security_event import SecurityAction
+from app.services.mfa_service import issue_login_challenge
 
 import resend
 
@@ -202,6 +203,13 @@ async def login_user(payload: LoginRequest, db: AsyncSession, client_ip: str = "
 
     if redis_client:
         redis_client.delete(attempt_key)
+
+    if getattr(user, "mfa_enabled", False):
+        return LoginResponse(
+            needs_mfa=True,
+            mfa_ticket=issue_login_challenge(user.id),
+            email=user.email,
+        ), None
 
     token = create_access_token(session_claims(user))
     refresh_token = create_refresh_token(session_claims(user))

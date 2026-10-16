@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Boolean, Integer
+from sqlalchemy import Column, String, DateTime, Boolean, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -16,6 +16,9 @@ class User(Base):
     email_verified = Column(Boolean, nullable=False, default=False)
     hashed_password = Column(String, nullable=False)
     session_version = Column(Integer, nullable=False, server_default="0")
+    mfa_enabled = Column(Boolean, nullable=False, server_default="false")
+    mfa_secret_encrypted = Column(Text, nullable=True)
+    mfa_recovery_code_hashes = Column(Text, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
