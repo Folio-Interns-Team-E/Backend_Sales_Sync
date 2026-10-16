@@ -30,6 +30,10 @@ from app.services.knowledge_base_rag_service import KnowledgeBaseRAGService
 logger = logging.getLogger(__name__)
 
 
+class EmailQualityError(Exception):
+    """Safe, user-facing failure raised when an AI draft misses quality gates."""
+
+
 class ChatService(ChatAgentsService):
 
     ICP_QUESTIONS = (
@@ -419,7 +423,7 @@ class ChatService(ChatAgentsService):
                             "title": existing_lead.job_title,
                             "company": existing_lead.company_name,
                             "email": existing_lead.email,
-                            "raw_data": existing_lead.ai_context_data.get("raw_pool_data", {})
+                            "raw_data": (existing_lead.ai_context_data or {}).get("raw_pool_data", {})
                         }
 
                         email_agent = EmailAgent()
@@ -434,6 +438,13 @@ class ChatService(ChatAgentsService):
                                 icp,
                                 message,
                                 revision_feedback=evaluation.get("feedback", "")
+                            )
+
+                        remaining_problems = email_agent.validate_email(email_content)
+                        if remaining_problems:
+                            raise EmailQualityError(
+                                "I couldn't produce a draft that passed the outreach quality checks, "
+                                "so nothing was saved. Please add more prospect context and try again."
                             )
 
                         subject = email_content.get("subject", "Quick Question")
@@ -617,7 +628,7 @@ class ChatService(ChatAgentsService):
                     await self.db.rollback()
                 except Exception:
                     pass
-                final_response = (
+                final_response = str(ai_err) if isinstance(ai_err, EmailQualityError) else (
                     "I encountered an error while processing your request. "
                     "Please try again or rephrase your question."
                 )

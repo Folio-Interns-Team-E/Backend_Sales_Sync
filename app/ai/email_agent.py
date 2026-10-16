@@ -32,6 +32,35 @@ class EmailAgent:
         },
     }
 
+    @staticmethod
+    def validate_email(email_content: object) -> list[str]:
+        """Apply deterministic quality gates before an AI draft can be persisted."""
+        if not isinstance(email_content, dict):
+            return ["The provider did not return an email object."]
+        subject = email_content.get("subject")
+        body = email_content.get("body")
+        if not isinstance(subject, str) or not subject.strip():
+            return ["The subject is missing."]
+        if not isinstance(body, str) or not body.strip():
+            return ["The email body is missing."]
+
+        problems = []
+        if len(subject.split()) >= 5:
+            problems.append("Keep the subject under five words.")
+        if len(body.split()) > 100:
+            problems.append("Keep the body under 100 words.")
+        paragraphs = [part.strip() for part in body.split("\n\n") if part.strip()]
+        if len(paragraphs) != 3:
+            problems.append("Use exactly three paragraphs separated by blank lines.")
+        forbidden = (
+            "hope this email finds you well",
+            "my name is",
+            "i stumbled upon your profile",
+        )
+        if any(phrase in body.lower() for phrase in forbidden):
+            problems.append("Remove generic cold-email clichés.")
+        return problems
+
     def _extract_json(self, text: str) -> dict:
         """
         Helper method to extract and parse the first valid JSON object from raw LLM output,
@@ -142,7 +171,14 @@ class EmailAgent:
             data = response.json()
             content = data["choices"][0]["message"]["content"].strip()
             
-            return self._extract_json(content)
+            result = self._extract_json(content)
+            structural_problems = self.validate_email(result)
+            if structural_problems and any(
+                problem in {"The provider did not return an email object.", "The subject is missing.", "The email body is missing."}
+                for problem in structural_problems
+            ):
+                raise ValueError("Invalid email draft returned by AI provider")
+            return result
 
     async def evaluate_email(self, email_content: dict, lead_info: dict, icp: str, message: str) -> dict:
         """Evaluation agent: reviews a drafted email against the ICP and the copywriter's
@@ -222,10 +258,18 @@ class EmailAgent:
                 content = data["choices"][0]["message"]["content"].strip()
                 
                 result = self._extract_json(content)
+                structural_problems = self.validate_email(email_content)
+                feedback = str(result.get("feedback", "")).strip()
+                if structural_problems:
+                    feedback = " ".join(structural_problems + ([feedback] if feedback else []))
                 return {
-                    "approved": bool(result.get("approved", True)),
-                    "feedback": result.get("feedback", "")
+                    "approved": bool(result.get("approved", True)) and not structural_problems,
+                    "feedback": feedback,
                 }
         except (httpx.HTTPError, KeyError, json.JSONDecodeError) as e:
-            logger.error(f"Email evaluation failed, failing open: {e}", exc_info=True)
-            return {"approved": True, "feedback": ""}
+            structural_problems = self.validate_email(email_content)
+            logger.error("Email evaluation failed; applying deterministic quality gates: %s", e, exc_info=True)
+            return {
+                "approved": not structural_problems,
+                "feedback": " ".join(structural_problems),
+            }

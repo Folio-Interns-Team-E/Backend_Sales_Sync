@@ -26,9 +26,62 @@ class SupervisorAgent:
 
     BASE_URL = "https://api.groq.com/openai/v1"
     MODEL = "openai/gpt-oss-120b"
+    ACTIONS = {
+        "UPDATE_ICP",
+        "GET_LEADS",
+        "ANALYZE_LEAD",
+        "DRAFT_EMAIL",
+        "MEETING_OPERATION",
+        "GENERATE_PROPOSAL",
+        "NORMAL",
+    }
+    ACTION_ALIASES = {
+        "CREATE_MEETING": "MEETING_OPERATION",
+        "CANCEL_MEETING": "MEETING_OPERATION",
+        "RESCHEDULE_MEETING": "MEETING_OPERATION",
+    }
 
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
+
+    @classmethod
+    def normalize_action(cls, payload: object) -> dict:
+        """Turn untrusted model output into the small contract used by ChatService."""
+        if not isinstance(payload, dict):
+            raise ValueError("AI router returned an invalid response")
+
+        raw_action = str(payload.get("action", "NORMAL")).strip().upper()
+        action = cls.ACTION_ALIASES.get(raw_action, raw_action)
+        if action not in cls.ACTIONS:
+            action = "NORMAL"
+
+        raw_parameters = payload.get("parameters")
+        parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
+
+        normalized: dict[str, object] = {}
+        for key in ("keywords", "industry", "country"):
+            value = parameters.get(key, [])
+            if isinstance(value, str):
+                value = [value]
+            if isinstance(value, list):
+                normalized[key] = [
+                    str(item).strip()[:200]
+                    for item in value[:20]
+                    if str(item).strip()
+                ]
+            else:
+                normalized[key] = []
+
+        try:
+            normalized["limit"] = max(1, min(int(parameters.get("limit", 20)), 50))
+        except (TypeError, ValueError):
+            normalized["limit"] = 20
+
+        start_time = parameters.get("start_time")
+        if isinstance(start_time, str) and start_time.strip():
+            normalized["start_time"] = start_time.strip()[:100]
+
+        return {"action": action, "parameters": normalized}
 
     async def extract_action(self, message: str, icp: str) -> dict:
         """
@@ -66,10 +119,10 @@ class SupervisorAgent:
                 Examples:
 
                 User: "Schedule a meeting with Dharmesh Shah for tomorrow at 2 PM"
-                Output: {{"action": "CREATE_MEETING", "parameters": {{"keywords": ["Dharmesh Shah"], "start_time": "2026-07-09T14:00:00"}}}}
+                Output: {{"action": "MEETING_OPERATION", "parameters": {{"keywords": ["Dharmesh Shah"], "start_time": "2026-07-09T14:00:00"}}}}
 
                 User: "Cancel my appointment with Dharmesh"
-                Output: {{"action": "CANCEL_MEETING", "parameters": {{"keywords": ["Dharmesh"]}}}}
+                Output: {{"action": "MEETING_OPERATION", "parameters": {{"keywords": ["Dharmesh"]}}}}
 
                 User message:
                 "{message}"
@@ -97,7 +150,7 @@ class SupervisorAgent:
             raw_content = data["choices"][0]["message"]["content"]
             
             cleaned_content = re.sub(r"^```json\s*|\s*```$", "", raw_content.strip(), flags=re.IGNORECASE)
-            return json.loads(cleaned_content)
+            return self.normalize_action(json.loads(cleaned_content))
 
     async def run(
         self, 
