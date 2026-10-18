@@ -22,6 +22,7 @@ from app.models.email import Email
 logger = logging.getLogger(__name__)
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
@@ -101,6 +102,15 @@ async def refresh_access_token(refresh_token: str) -> str:
         resp.raise_for_status()
         data = resp.json()
         return data["access_token"]
+
+
+async def revoke_google_token(refresh_token: str) -> None:
+    """Revoke a Google grant without placing the credential in a URL or log."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(GOOGLE_REVOKE_URL, data={"token": refresh_token})
+        # A 400 response means the token is already invalid and cannot be used again.
+        if response.status_code not in {200, 400}:
+            response.raise_for_status()
 
 
 async def search_gmail_messages(refresh_token: str, query: str, max_results: int = 10) -> list[dict]:

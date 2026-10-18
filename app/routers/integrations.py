@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.core.crypto import encrypt_key
+from app.core.crypto import decrypt_key, encrypt_key
 from app.middleware.auth_middleware import get_current_user
 from app.models.user import User
 from app.models.google_credentials import GoogleCredentials
@@ -16,7 +16,14 @@ from app.services.google_calendar_service import (
     begin_calendar_oauth, consume_calendar_oauth, calendar_callback_url,
     exchange_calendar_code, save_calendar_credentials,
 )
-from app.services.gmail_service import begin_gmail_oauth, consume_gmail_oauth, exchange_authorization_code, fetch_google_email
+from app.services.gmail_service import (
+    begin_gmail_oauth,
+    consume_gmail_oauth,
+    exchange_authorization_code,
+    fetch_google_email,
+    google_refresh_token,
+    revoke_google_token,
+)
 from app.config import settings
 from app.middleware.rate_limit import OAUTH_FLOW, rate_limit
 
@@ -67,6 +74,31 @@ async def google_calendar_callback(request: Request, state: str = "", code: str 
 async def google_calendar_status(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     record = (await db.execute(select(GoogleCalendarCredentials).where(GoogleCalendarCredentials.user_id == current_user.id))).scalar_one_or_none()
     return {"success": True, "data": {"connected": record is not None, "email": record.google_email if record else None}}
+
+
+@router.delete("/google-calendar")
+async def disconnect_google_calendar(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    record = (
+        await db.execute(
+            select(GoogleCalendarCredentials).where(
+                GoogleCalendarCredentials.user_id == current_user.id
+            )
+        )
+    ).scalar_one_or_none()
+    if record is not None:
+        try:
+            await revoke_google_token(decrypt_key(record.encrypted_refresh_token))
+        except Exception:
+            logger.warning(
+                "Google Calendar token revocation failed for user %s; deleting local credentials",
+                current_user.id,
+            )
+        await db.delete(record)
+        await db.commit()
+    return {"success": True, "message": "Google Calendar disconnected", "data": {}}
 
 
 def gmail_success_redirect_url() -> str:
@@ -171,3 +203,25 @@ async def gmail_status(
             "email": creds.google_email if creds else None,
         },
     }
+
+
+@router.delete("/gmail")
+async def disconnect_gmail(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(GoogleCredentials).where(GoogleCredentials.user_id == current_user.id)
+    )
+    credentials = result.scalar_one_or_none()
+    if credentials is not None:
+        try:
+            await revoke_google_token(google_refresh_token(credentials))
+        except Exception:
+            logger.warning(
+                "Gmail token revocation failed for user %s; deleting local credentials",
+                current_user.id,
+            )
+        await db.delete(credentials)
+        await db.commit()
+    return {"success": True, "message": "Gmail disconnected", "data": {}}
