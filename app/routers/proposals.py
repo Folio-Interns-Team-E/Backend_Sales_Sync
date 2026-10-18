@@ -157,6 +157,29 @@ async def download_template(
         headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
     )
 
+
+@router.get("/{proposal_id}/download")
+async def download_proposal(
+    proposal_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    team_ctx: TeamContext = Depends(get_team_context),
+):
+    service = ProposalService(db)
+    proposal = await service.get_proposal(proposal_id, team_ctx.team_id)
+    try:
+        content, content_type = await download_from_s3(proposal.file_url)
+    except RuntimeError as exc:
+        logger.exception("Proposal document download failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    filename = Path(proposal.file_url).name or f"proposal-{proposal_id}.docx"
+    safe_filename = filename.replace('"', "")
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
+
 @router.patch("/{proposal_id}", response_model=ApiResponse[ProposalResponse])
 async def update_proposal(
     proposal_id: UUID,
