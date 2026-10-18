@@ -584,13 +584,11 @@ class ChatService(ChatAgentsService):
                     logger.info(f"Proposal successfully flushed and saved to S3: {file_url}")
 
                     badge = "Passed" if evaluation_report.get("passed") else "Warning (Needs Manual Polish)"
+                    proposal_title = filename.replace(".docx", "").replace("_", " ")
                     response = (
-                        f"Generated Proposal: {filename.replace('.docx', '').replace('_', ' ')}\n"
-                        f"URL: ({file_url})\n\n"
-                        f"--- Quality Assurance Report ---\n"
-                        f"Quality Grade: {badge} ({evaluation_report.get('overall_score')}/10)\n"
-                        f"Tone Check: {evaluation_report.get('human_authenticity', {}).get('analysis')}\n"
-                        
+                        f"Your proposal, {proposal_title}, has been generated and saved as a draft. "
+                        "You can review and download it from the Proposals tab. "
+                        f"Quality check: {badge} ({evaluation_report.get('overall_score')}/10)."
                     )
                 else:
                     rag_service = KnowledgeBaseRAGService(self.db)
@@ -602,7 +600,7 @@ class ChatService(ChatAgentsService):
                         response = "I can help you search for prospects, analyze individuals, modify your ICP, or answer questions from your knowledge base. What would you like to do?"
 
 
-                if action in {"UPDATE_ICP", "ICP_FOLLOWUP", "MEETING_OPERATION"}:
+                if action in {"UPDATE_ICP", "ICP_FOLLOWUP", "MEETING_OPERATION", "GENERATE_PROPOSAL"}:
                     final_response = response
                 else:
                     final_response = await supervisor.run(

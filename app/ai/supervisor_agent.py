@@ -212,10 +212,9 @@ class SupervisorAgent:
             )
         except Exception as e:
             logger.error(f"SupervisorAgent synthesis failed: {e}", exc_info=True)
-            return (
-                "The action was executed successfully"
-                f"{execution_result}"
-            )
+            # The execution result is already written for the user. Returning it
+            # directly also avoids exposing an internal fallback status message.
+            return execution_result
 
     async def _synthesize_response(
         self, 
