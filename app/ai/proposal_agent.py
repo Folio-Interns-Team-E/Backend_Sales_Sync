@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 from uuid import UUID
 
+import httpx
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from python_docx_replace import docx_replace  # Installed utility to prevent broken run fragments
@@ -39,7 +40,7 @@ class ProposalAgent:
         team_id: UUID, 
         lead_id: UUID | None = None, 
         template_id: UUID | None = None
-    ) -> tuple[str, io.BytesIO]:
+    ) -> tuple[str, io.BytesIO, dict, dict]:
         """
         Primary entry point. Resolves lead details and the optional custom template,
         queries the LLM for proposal content AND style preferences,
@@ -100,7 +101,7 @@ class ProposalAgent:
                 style_config=style_config,
                 template_bytes=template_bytes
             )
-            return f"{proposal_title}.docx", doc_stream
+            return f"{proposal_title}.docx", doc_stream, proposal_data, style_config
         except Exception as e:
             logger.error(f"DOCX compilation failed: {e}", exc_info=True)
             raise RuntimeError("ProposalAgent failed to construct the Microsoft Word file format.")

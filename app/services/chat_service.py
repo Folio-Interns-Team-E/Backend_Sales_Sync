@@ -506,7 +506,7 @@ class ChatService(ChatAgentsService):
 
 
                     proposal_agent = ProposalAgent(self.db)
-                    filename, file_bytes_stream = await proposal_agent.run(
+                    filename, file_bytes_stream, raw_proposal_json, _styles = await proposal_agent.run(
                         user_prompt=message,
                         team_id=team.id,
                         lead_id=lead_id,
@@ -522,16 +522,8 @@ class ChatService(ChatAgentsService):
                         user_id=str(user_id),
                     )
 
-                    await asyncio.sleep(1)
-                    _, raw_proposal_json, styles = await proposal_agent._compile_proposal_data(
-                        user_prompt=message,
-                        icp_context=team.icp if team.icp else "",
-                        has_template=bool(template_id)
-                    )
-
                     logger.info("Initializing proposal single-pass evaluation...")
                     evaluator = ProposalEvaluatorAgent(self.db)
-                    await asyncio.sleep(1)
                     evaluation_report = await evaluator.evaluate_proposal(
                         original_prompt=message,
                         generated_proposal_data=raw_proposal_json,
@@ -628,10 +620,18 @@ class ChatService(ChatAgentsService):
                     await self.db.rollback()
                 except Exception:
                     pass
-                final_response = str(ai_err) if isinstance(ai_err, EmailQualityError) else (
-                    "I encountered an error while processing your request. "
-                    "Please try again or rephrase your question."
-                )
+                if isinstance(ai_err, EmailQualityError):
+                    final_response = str(ai_err)
+                elif action == "GENERATE_PROPOSAL" and isinstance(ai_err, RuntimeError):
+                    final_response = (
+                        "I couldn't generate the proposal because a required service failed: "
+                        f"{ai_err}. Please try again shortly."
+                    )
+                else:
+                    final_response = (
+                        "I encountered an error while processing your request. "
+                        "Please try again or rephrase your question."
+                    )
 
             ai_msg = ChatMessage(
                 chat_id=chat_uuid,
