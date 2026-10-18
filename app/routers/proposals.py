@@ -11,6 +11,10 @@ from app.schemas.proposals import (
 from app.schemas.common import ApiResponse
 from app.services.proposals_service import ProposalService
 from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
+MAX_TEMPLATE_SIZE = 10 * 1024 * 1024
 router = APIRouter(prefix="/proposals", tags=["proposals"])
 
 
@@ -76,8 +80,16 @@ async def upload_template(
     team_ctx: TeamContext = Depends(get_team_context),
     current_user: User = Depends(get_current_user),
 ):
-    file_bytes = await file.read()
+    file_bytes = await file.read(MAX_TEMPLATE_SIZE + 1)
     service = ProposalService(db)
+
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The template is empty")
+    if len(file_bytes) > MAX_TEMPLATE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="The template must be 10 MB or smaller",
+        )
 
     allowed_types = {
         "application/msword",
@@ -92,14 +104,21 @@ async def upload_template(
             detail="Only .doc and .docx files are accepted",
         )
 
-    template = await service.upload_template(
-        team_ctx.team_id,
-        current_user.id,
-        template_name=template_name,
-        file_bytes=file_bytes,
-        filename=file.filename or "template",
-        content_type=file.content_type or "application/octet-stream",
-    )
+    try:
+        template = await service.upload_template(
+            team_ctx.team_id,
+            current_user.id,
+            template_name=template_name,
+            file_bytes=file_bytes,
+            filename=file.filename or "template",
+            content_type=file.content_type or "application/octet-stream",
+        )
+    except RuntimeError as exc:
+        logger.exception("Proposal template upload failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     return ApiResponse(success=True, message="Template uploaded successfully", data=template)
 
 
