@@ -5,6 +5,7 @@ from app.config import settings
 import uuid
 import re
 import asyncio
+from urllib.parse import unquote, urlparse
 from pathlib import Path
 from asyncio import to_thread
 
@@ -82,3 +83,40 @@ def generate_presigned_url(s3_url: str, expiration: int = 3600) -> str:
         ExpiresIn=expiration,
     )
     return url
+
+
+def s3_key_from_url(s3_url: str) -> str:
+    parsed = urlparse(s3_url)
+    expected_host = f"{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com"
+    if parsed.scheme != "https" or parsed.netloc != expected_host:
+        raise RuntimeError("The stored file does not belong to the configured bucket")
+    key = unquote(parsed.path.lstrip("/"))
+    if not key:
+        raise RuntimeError("The stored file path is invalid")
+    return key
+
+
+async def download_from_s3(s3_url: str) -> tuple[bytes, str]:
+    key = s3_key_from_url(s3_url)
+    try:
+        response = await asyncio.wait_for(
+            to_thread(
+                s3_client.get_object,
+                Bucket=settings.aws_bucket_name,
+                Key=key,
+            ),
+            timeout=30,
+        )
+        body = await asyncio.wait_for(to_thread(response["Body"].read), timeout=30)
+        return body, response.get("ContentType") or "application/octet-stream"
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError("File storage did not respond in time") from exc
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code in {"NoSuchKey", "NotFound"}:
+            raise RuntimeError("The stored file no longer exists") from exc
+        if code in {"AccessDenied", "AllAccessDisabled"}:
+            raise RuntimeError("File storage credentials do not have permission to download") from exc
+        raise RuntimeError("File storage rejected the download") from exc
+    except BotoCoreError as exc:
+        raise RuntimeError("File storage connection failed") from exc

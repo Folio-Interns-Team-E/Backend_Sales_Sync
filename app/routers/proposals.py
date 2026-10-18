@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from app.database import get_db
@@ -12,6 +12,8 @@ from app.schemas.common import ApiResponse
 from app.services.proposals_service import ProposalService
 from typing import Optional
 import logging
+from pathlib import Path
+from app.core.s3 import download_from_s3
 
 logger = logging.getLogger(__name__)
 MAX_TEMPLATE_SIZE = 10 * 1024 * 1024
@@ -130,6 +132,30 @@ async def delete_template(
     service = ProposalService(db)
     await service.delete_template(team_ctx.team_id)
     return ApiResponse(success=True, message="Template deleted", data={})
+
+
+@router.get("/template/download")
+async def download_template(
+    db: AsyncSession = Depends(get_db),
+    team_ctx: TeamContext = Depends(get_team_context),
+):
+    service = ProposalService(db)
+    template = await service.get_template(team_ctx.team_id)
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+    try:
+        content, content_type = await download_from_s3(template.file_url)
+    except RuntimeError as exc:
+        logger.exception("Proposal template download failed")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    filename = Path(template.file_url).name or "proposal-template.docx"
+    safe_filename = filename.replace('"', "")
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
 
 @router.patch("/{proposal_id}", response_model=ApiResponse[ProposalResponse])
 async def update_proposal(

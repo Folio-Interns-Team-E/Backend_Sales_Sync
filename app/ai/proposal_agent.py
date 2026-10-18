@@ -5,7 +5,6 @@ import re
 from datetime import datetime
 from uuid import UUID
 
-import httpx
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from python_docx_replace import docx_replace  # Installed utility to prevent broken run fragments
@@ -16,6 +15,7 @@ from app.config import settings
 from app.models.lead import Lead
 from app.models.team import Team
 from app.models.proposal import ProposalTemplate  # Import the ProposalTemplate model
+from app.core.s3 import download_from_s3
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +60,8 @@ class ProposalAgent:
             
             if template_record and template_record.file_url:
                 try:
-                    # Download the template .docx file from your storage (S3/Cloud storage)
-                    async with httpx.AsyncClient() as client:
-                        resp = await client.get(template_record.file_url)
-                        resp.raise_for_status()
-                        template_bytes = io.BytesIO(resp.content)
+                    content, _ = await download_from_s3(template_record.file_url)
+                    template_bytes = io.BytesIO(content)
                 except Exception as e:
                     logger.warning(f"Failed to fetch template from S3: {e}. Falling back to clean generation.")
 
