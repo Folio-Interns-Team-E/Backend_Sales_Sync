@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,30 +38,14 @@ class EmailService:
         data = [EmailResponse.model_validate(e).model_dump(mode="json") for e in emails]
         return data
 
-    async def create_email(self, team_id: UUID, lead_id: UUID, subject: str,
-                           body: str, tone: str = "Professional", sender_id: UUID | None = None):
-        result = await self.db.execute(
-            select(Lead).where(Lead.id == lead_id, Lead.team_id == team_id)
-        )
-        lead = result.scalar_one_or_none()
-        if not lead:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
-
-        email = Email(
-            lead_id=lead_id,
-            subject=subject,
-            body=body,
-            status=EmailStatus.SENT,
-            ai_metadata={"tone": tone, **({"sender_user_id": str(sender_id)} if sender_id else {})},
-        )
-        self.db.add(email)
-
-        lead.status = "Sent"
-        await self.db.commit()
-        await self.db.refresh(email)
-        return email
-
-    async def draft_email(self, team_id: UUID, lead_id: UUID, subject: str, body: str):
+    async def draft_email(
+        self,
+        team_id: UUID,
+        lead_id: UUID,
+        subject: str,
+        body: str,
+        ai_metadata: dict | None = None,
+    ):
         result = await self.db.execute(
             select(Lead).where(Lead.id == lead_id, Lead.team_id == team_id)
         )
@@ -73,9 +58,48 @@ class EmailService:
             subject=subject,
             body=body,
             status=EmailStatus.DRAFT,
+            ai_metadata=ai_metadata or {},
         )
         self.db.add(email)
         lead.status = "Drafted"
+        await self.db.commit()
+        await self.db.refresh(email)
+        return email
+
+    async def get_delivery_target(self, email_id: UUID, team_id: UUID) -> tuple[Email, Lead]:
+        result = await self.db.execute(
+            select(Email, Lead)
+            .join(Lead, Email.lead_id == Lead.id)
+            .where(Email.id == email_id, Lead.team_id == team_id)
+        )
+        row = result.one_or_none()
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not found")
+        email, lead = row
+        if email.status == EmailStatus.SENT:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email was already sent")
+        if not lead.email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Lead does not have an email address",
+            )
+        return email, lead
+
+    async def mark_sent(
+        self,
+        email: Email,
+        lead: Lead,
+        sender_id: UUID,
+        provider_message_id: str,
+    ) -> Email:
+        email.status = EmailStatus.SENT
+        email.sent_at = datetime.now(timezone.utc)
+        email.ai_metadata = {
+            **(email.ai_metadata or {}),
+            "sender_user_id": str(sender_id),
+            "provider_message_id": provider_message_id,
+        }
+        lead.status = "Sent"
         await self.db.commit()
         await self.db.refresh(email)
         return email
