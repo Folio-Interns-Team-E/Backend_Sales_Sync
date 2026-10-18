@@ -25,6 +25,19 @@ def _sanitize_filename(filename: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", base_name)
     return sanitized.strip("._") or "file"
 
+
+def _storage_error_message(exc: ClientError) -> str:
+    code = str(exc.response.get("Error", {}).get("Code", ""))
+    if code in {"InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken"}:
+        return "File storage credentials are invalid"
+    if code in {"NoSuchBucket", "NotFound"}:
+        return "The configured file storage bucket does not exist"
+    if code in {"AccessDenied", "AllAccessDisabled"}:
+        return "File storage credentials do not have permission to upload"
+    if code in {"PermanentRedirect", "AuthorizationHeaderMalformed", "IllegalLocationConstraintException"}:
+        return "The file storage bucket region is incorrect"
+    return "File storage rejected the upload"
+
 async def upload_to_s3(file_bytes: bytes, filename: str, content_type: str, prefix: str = "knowledge-base", user_id: str = "system") -> str:
     if not all(
         [
@@ -52,8 +65,10 @@ async def upload_to_s3(file_bytes: bytes, filename: str, content_type: str, pref
         )
     except asyncio.TimeoutError as exc:
         raise RuntimeError("File storage did not respond in time") from exc
-    except (BotoCoreError, ClientError) as exc:
-        raise RuntimeError("File storage rejected the upload") from exc
+    except ClientError as exc:
+        raise RuntimeError(_storage_error_message(exc)) from exc
+    except BotoCoreError as exc:
+        raise RuntimeError("File storage connection failed") from exc
     
     url = f"https://{settings.aws_bucket_name}.s3.{settings.aws_region}.amazonaws.com/{key}"
     return url
