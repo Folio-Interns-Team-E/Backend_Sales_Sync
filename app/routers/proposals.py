@@ -14,6 +14,7 @@ from typing import Optional
 import logging
 from pathlib import Path
 from app.core.s3 import download_from_s3
+from app.services.plan_service import enforce_limit
 
 logger = logging.getLogger(__name__)
 MAX_TEMPLATE_SIZE = 10 * 1024 * 1024
@@ -39,6 +40,7 @@ async def create_proposal(
     db: AsyncSession = Depends(get_db),
     team_ctx: TeamContext = Depends(get_team_context),
 ):
+    await enforce_limit(db, team_ctx.team_id, "proposals_monthly")
     service = ProposalService(db)
     proposal = await service.create_proposal(
         team_ctx.team_id, payload.file_url, payload.lead_id,

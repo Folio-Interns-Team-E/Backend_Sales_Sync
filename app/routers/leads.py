@@ -14,6 +14,7 @@ from app.services.hunter_service import HunterService
 from pydantic import BaseModel, Field
 from app.models.team_member import MemberRole
 from app.middleware.rate_limit import LEAD_DISCOVERY, LEAD_IMPORT, rate_limit
+from app.services.plan_service import enforce_limit
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -162,6 +163,7 @@ async def create_lead(
     db: AsyncSession = Depends(get_db),
     team_ctx: TeamContext = Depends(get_team_context),
 ):
+    await enforce_limit(db, team_ctx.team_id, "leads")
     service = LeadService(db)
     lead = await service.create_lead(
         team_ctx.team_id, payload.name, payload.company,

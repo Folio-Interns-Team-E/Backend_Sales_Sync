@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
+    stripe_plus_price: str = ""
+    stripe_pro_price: str = ""
+    # Temporary deployment compatibility; remove after production variables are renamed.
     stripe_growth_price: str = ""
     stripe_enterprise_price: str = ""
 

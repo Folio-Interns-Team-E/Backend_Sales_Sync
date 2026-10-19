@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from app.config import settings
 from app.models.team import Team
 from app.models.subscription import Subscription, SubscriptionStatus, SubscriptionTier
+from app.services.plan_service import normalize_tier, plan_snapshot
 
 stripe.api_key = settings.stripe_secret_key
 
@@ -26,13 +27,15 @@ class BillingService:
         team = await self._get_team(team_id)
         
         price_map = {
-            "growth": settings.stripe_growth_price,
-            "enterprise": settings.stripe_enterprise_price,
+            "plus": settings.stripe_plus_price,
+            "pro": settings.stripe_pro_price,
         }
         
-        price_id = price_map.get(tier)
-        if not price_id:
+        if tier not in price_map:
             raise HTTPException(status_code=400, detail="Invalid tier")
+        price_id = price_map[tier]
+        if not price_id:
+            raise HTTPException(status_code=503, detail=f"{tier.title()} checkout is not configured")
         
         if not team.stripe_customer_id:
             customer = await stripe.Customer.create_async(
@@ -97,6 +100,7 @@ class BillingService:
 
     async def get_subscription_status(self, team_id: UUID):
         team = await self._get_team(team_id)
+        snapshot = await plan_snapshot(self.db, team_id)
         
         result = await self.db.execute(
             select(Subscription)
@@ -107,15 +111,19 @@ class BillingService:
         
         if latest_sub:
             return {
-                "tier": latest_sub.tier,
+                "tier": normalize_tier(latest_sub.tier),
                 "status": latest_sub.status,
                 "ends_at": latest_sub.current_period_end,
-                "cancel_at_period_end": latest_sub.cancel_at_period_end
+                "cancel_at_period_end": latest_sub.cancel_at_period_end,
+                "limits": snapshot["limits"],
+                "usage": snapshot["usage"],
             }
         
         return {
-            "tier": getattr(team, "subscription_tier", SubscriptionTier.FREE.value),
+            "tier": snapshot["tier"],
             "status": getattr(team, "subscription_status", SubscriptionStatus.ACTIVE.value),
             "ends_at": getattr(team, "subscription_ends_at", None),
-            "cancel_at_period_end": False
+            "cancel_at_period_end": False,
+            "limits": snapshot["limits"],
+            "usage": snapshot["usage"],
         }

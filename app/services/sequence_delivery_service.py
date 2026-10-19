@@ -9,6 +9,8 @@ from app.models.lead import Lead
 from app.models.sequence import EmailSuppression, Sequence, SequenceDelivery, SequenceEnrollment, SequenceStep
 from app.services.gmail_service import send_email_on_behalf_of_user
 from app.services.notification_service import create_notification
+from app.services.plan_service import enforce_limit
+from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
@@ -107,6 +109,7 @@ async def process_due_enrollments(db: AsyncSession, batch_size: int = 20) -> dic
         await db.flush()
 
         try:
+            await enforce_limit(db, sequence.team_id, "emails_monthly")
             delivery.provider_message_id = await send_email_on_behalf_of_user(
                 db, enrollment.owner_id, lead.email, render_message(step.subject, lead), render_message(step.body, lead)
             )
@@ -122,6 +125,17 @@ async def process_due_enrollments(db: AsyncSession, batch_size: int = 20) -> dic
                 enrollment.next_send_at = now + timedelta(days=steps[enrollment.current_step].delay_days)
             lead.status = "Sent"
             result["sent"] += 1
+        except HTTPException as exc:
+            if exc.status_code == 402:
+                delivery.status = "Pending"
+                delivery.error = str(exc.detail)
+                if now.month == 12:
+                    enrollment.next_send_at = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+                else:
+                    enrollment.next_send_at = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+                result["limited"] += 1
+                continue
+            raise
         except Exception as exc:
             logger.exception("Sequence delivery failed for enrollment %s", enrollment.id)
             delivery.status = "Failed"

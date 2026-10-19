@@ -25,6 +25,7 @@ from app.models.user import User
 from app.ai.icp_agent import ICPAgent
 from app.ai.email_agent import EmailAgent
 from app.services.knowledge_base_rag_service import KnowledgeBaseRAGService
+from app.services.plan_service import enforce_limit
 
 
 
@@ -533,6 +534,8 @@ class ChatService(ChatAgentsService):
                     from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome
                     from app.ai.proposal_agent import ProposalAgent
                     from sqlalchemy.exc import DBAPIError, IntegrityError
+
+                    await enforce_limit(self.db, team.id, "proposals_monthly")
 
                     name_keywords = params.get("keywords", [])
                     lead_id = None

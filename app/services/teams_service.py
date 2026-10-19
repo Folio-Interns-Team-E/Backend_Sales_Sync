@@ -18,6 +18,7 @@ from app.schemas.teams import (
 )
 from app.config import settings
 from app.services.audit_service import record_audit_event
+from app.services.plan_service import enforce_limit
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,8 @@ async def invite_member(
     if team.invite_code_expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite code expired; ask an admin to rotate it")
 
+    await enforce_limit(db, team_id, "members")
+
     await _send_team_invite_email(
         to_email=payload.email,
         team_name=team.name,
@@ -235,6 +238,8 @@ async def join_existing_team(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You are already a member of this team"
         )
+
+    await enforce_limit(db, team.id, "members")
 
     membership = TeamMember(
         user_id=current_user.id,

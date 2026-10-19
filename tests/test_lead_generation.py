@@ -46,6 +46,7 @@ async def test_generation_deduplicates_existing_and_batch_results():
         patch.object(service, "_criteria_from_icp", new=AsyncMock(return_value={})),
         patch.object(service, "_search_apollo", new=AsyncMock(return_value=[{"id": "1"}, {"id": "2"}, {"id": "3"}])),
         patch.object(service, "_enrich_person", new=AsyncMock(side_effect=prospects)),
+        patch("app.services.lead_generation_service.enforce_limit", new=AsyncMock()),
         patch.object(service, "_score", new=AsyncMock(return_value={"2": {"score": 91, "reasoning": "Strong title and segment match."}})),
     ):
         leads, skipped = await service.generate(team_id, 10)

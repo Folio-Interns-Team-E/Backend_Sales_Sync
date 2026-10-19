@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.lead import Lead, LeadStatus
 from app.models.team import Team
 from app.services.lead_generation_service import LeadGenerationService
+from app.services.plan_service import enforce_limit
 
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -78,6 +79,7 @@ class LeadImportService:
         duplicate_count = len(rows) - len(unique)
         if not unique:
             return [], duplicate_count, invalid
+        await enforce_limit(self.db, team_id, "leads", len(unique))
         scores = await LeadGenerationService(self.db)._score(team.icp, unique)
         leads = []
         for row in unique:

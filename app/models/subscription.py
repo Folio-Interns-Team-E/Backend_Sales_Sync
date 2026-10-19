@@ -9,8 +9,8 @@ import enum
 # Keep your Enums...
 class SubscriptionTier(str, enum.Enum):
     FREE = "free"
-    GROWTH = "growth"
-    ENTERPRISE = "enterprise"
+    PLUS = "plus"
+    PRO = "pro"
 
 class SubscriptionStatus(str, enum.Enum):
     ACTIVE = "active"

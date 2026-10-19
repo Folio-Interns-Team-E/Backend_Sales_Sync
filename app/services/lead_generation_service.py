@@ -14,6 +14,7 @@ from app.config import settings
 from app.models.lead import Lead, LeadStatus
 from app.models.team import Team
 from app.services.lead_provider_service import get_provider, provider_key, reset_usage_if_needed
+from app.services.plan_service import enforce_limit
 
 
 logger = logging.getLogger(__name__)
@@ -181,6 +182,8 @@ ICP:\n{icp}\nProspects:\n{json.dumps(compact)}""",
         if not unique:
             await self.db.commit()
             return [], len(prospects)
+
+        await enforce_limit(self.db, team_id, "leads", len(unique))
 
         scores = await self._score(team.icp, unique)
         leads = []

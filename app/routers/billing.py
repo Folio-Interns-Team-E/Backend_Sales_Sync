@@ -13,6 +13,7 @@ from app.models.subscription import Subscription, Invoice, SubscriptionStatus, S
 from app.services.billing_service import BillingService
 from app.middleware.auth_middleware import get_team_context, require_role, TeamContext
 from app.models.team_member import MemberRole
+from app.services.plan_service import normalize_tier
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -37,6 +38,8 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         session = event["data"]["object"]
         team_id = session["metadata"]["team_id"]
         tier = session["metadata"]["tier"]
+        if normalize_tier(tier) != tier or tier not in {"plus", "pro"}:
+            raise HTTPException(status_code=400, detail="Invalid subscription tier")
         stripe_subscription_id = session["subscription"]
         
         result = await db.execute(select(Team).where(Team.id == team_id))
@@ -174,6 +177,8 @@ async def checkout_complete(
         raise HTTPException(status_code=400, detail="Missing team_id in session metadata")
     if not tier:
         raise HTTPException(status_code=400, detail="Missing tier in session metadata")
+    if normalize_tier(tier) != tier or tier not in {"plus", "pro"}:
+        raise HTTPException(status_code=400, detail="Invalid tier in session metadata")
 
     team_id = _validate_checkout_team(team_id, team_ctx)
 

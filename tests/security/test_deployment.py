@@ -10,7 +10,7 @@ from app.serve import server_options
 
 
 def test_readiness_uses_deployed_migration_files():
-    assert health.expected_migration_heads() == {"20261016_account_mfa"}
+    assert health.expected_migration_heads() == {"20261019_plans"}
 
 
 @pytest.mark.parametrize("scheme", ["postgres", "postgresql", "postgresql+asyncpg"])

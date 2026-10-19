@@ -16,6 +16,7 @@ from app.schemas.chat import (
 from app.schemas.common import ApiResponse
 from app.services.chat_service import ChatService
 from app.middleware.rate_limit import AI_CHAT, rate_limit
+from app.services.plan_service import enforce_limit
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -28,6 +29,7 @@ async def list_chats(
     db: AsyncSession = Depends(get_db),
     team_ctx: TeamContext = Depends(get_team_context),
 ):
+    await enforce_limit(db, team_ctx.team_id, "ai_actions_monthly")
     service = ChatService(db)
     chats = await service.list_chats(team_ctx.team_id)
     return ApiResponse(success=True, message="Chats fetched", data=chats)

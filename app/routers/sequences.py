@@ -12,6 +12,7 @@ from app.models.user import User
 from app.schemas.common import ApiResponse
 from app.schemas.sequences import EnrollmentInput, EnrollmentResponse, RestartEnrollmentInput, SequenceInput, SequenceResponse, SequenceStatusInput, SuppressionInput
 from app.services.audit_service import record_audit_event
+from app.services.plan_service import enforce_limit
 
 router = APIRouter(prefix="/sequences", tags=["sequences"])
 
@@ -89,6 +90,8 @@ async def update_sequence(sequence_id: UUID, payload: SequenceInput, db: AsyncSe
 async def change_status(sequence_id: UUID, payload: SequenceStatusInput, db: AsyncSession = Depends(get_db), team_ctx: TeamContext = Depends(get_team_context), user: User = Depends(get_current_user)):
     row = await owned_sequence(db, sequence_id, team_ctx.team_id)
     if team_ctx.role == MemberRole.rep and row.owner_id != user.id: raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not own this sequence")
+    if payload.status == "Active" and row.status != "Active":
+        await enforce_limit(db, team_ctx.team_id, "active_sequences")
     if payload.status == "Active" and not await db.scalar(select(func.count()).select_from(SequenceStep).where(SequenceStep.sequence_id == row.id)): raise HTTPException(status.HTTP_409_CONFLICT, "Add at least one step")
     row.status = payload.status; record_audit_event(db, team_ctx.team_id, user.id, "sequence.status_changed", "sequence", row.id); await db.commit(); await db.refresh(row)
     return ApiResponse(success=True, message="Sequence status updated", data=await serialize(db, row))

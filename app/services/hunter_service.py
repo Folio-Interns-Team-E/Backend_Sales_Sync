@@ -11,6 +11,7 @@ from app.models.lead import Lead, LeadStatus
 from app.models.team import Team
 from app.services.lead_generation_service import LeadGenerationService
 from app.services.lead_provider_service import get_provider, provider_key, reset_usage_if_needed
+from app.services.plan_service import enforce_limit
 
 logger = logging.getLogger(__name__)
 BASE_URL = "https://api.hunter.io/v2"
@@ -92,6 +93,8 @@ class HunterService:
             Lead.team_id == team_id, func.lower(Lead.email).in_(emails)
         ))).scalars().all()) if emails else set()
         unique = [person for person in prospects if person["email"] not in existing]
+        if unique:
+            await enforce_limit(self.db, team_id, "leads", len(unique))
         try:
             scores = await LeadGenerationService(self.db)._score(team.icp, unique) if unique else {}
         except Exception:

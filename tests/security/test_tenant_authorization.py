@@ -84,6 +84,7 @@ async def test_invitation_targets_selected_team_only() -> None:
         patch("app.services.teams_service._get_membership", new=get_membership),
         patch("app.services.teams_service._get_team_with_members", new=get_team),
         patch("app.services.teams_service._send_team_invite_email", new=send_email),
+        patch("app.services.teams_service.enforce_limit", new=AsyncMock()),
     ):
         response = await invite_member(
             team_id,

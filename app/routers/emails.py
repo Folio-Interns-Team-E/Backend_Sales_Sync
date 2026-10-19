@@ -11,6 +11,7 @@ from app.schemas.common import ApiResponse
 from app.services.emails_service import EmailService
 from app.services.gmail_service import send_email_on_behalf_of_user
 from app.middleware.rate_limit import EMAIL_DRAFT, EMAIL_SEND, rate_limit
+from app.services.plan_service import enforce_limit
 
 router = APIRouter(prefix="/emails", tags=["emails"])
 logger = logging.getLogger(__name__)
@@ -84,6 +85,7 @@ async def send_email(
     current_user: User = Depends(get_current_user),
     team_ctx: TeamContext = Depends(get_team_context),
 ):
+    await enforce_limit(db, team_ctx.team_id, "emails_monthly")
     service = EmailService(db)
     email = await service.draft_email(
         team_ctx.team_id,
@@ -109,6 +111,7 @@ async def send_draft_email(
     current_user: User = Depends(get_current_user),
     team_ctx: TeamContext = Depends(get_team_context),
 ):
+    await enforce_limit(db, team_ctx.team_id, "emails_monthly")
     service = EmailService(db)
     await service.update_email(email_id, team_ctx.team_id, payload.subject, payload.body)
     email = await _deliver_email(service, db, email_id, team_ctx.team_id, current_user.id)
