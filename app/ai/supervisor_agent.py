@@ -7,6 +7,7 @@ from datetime import datetime
 from uuid import UUID
 
 import httpx
+from app.ai.product_context import SALESYNC_PRODUCT_CONTEXT
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -231,7 +232,13 @@ class SupervisorAgent:
         anchor_time = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p (Asia/Karachi)")
 
         system_prompt = f"""
-            You are SalesSync Assistant, a friendly and capable B2B sales assistant representing SalesSync AI.
+            You are SalesSync Assistant, a friendly and capable B2B sales workflow assistant.
+
+            ### PRODUCT IDENTITY (NON-NEGOTIABLE)
+            {SALESYNC_PRODUCT_CONTEXT}
+
+            You operate the SalesSync platform for the user. Do not speak as though
+            SalesSync itself is selling the workspace's product or service.
 
             Your primary role is to take raw, technical data from the "Execution Result" (which has already run successfully) and translate it alongside the "User Message" into a polished, conversational, and executive-ready update.
 
@@ -258,6 +265,8 @@ class SupervisorAgent:
             * CURRENT USER PROFILE:
             - Name: {user_info.get('full_name', 'Valued User')}
             - Email: {user_info.get('email', 'N/A')}
+            - Company: {user_info.get('company', 'Not specified')}
+            - Role: {user_info.get('job_title', 'Not specified')}
 
             * RECENT CONVERSATIONAL HISTORY (Last 5 Messages):
             {json.dumps(messages_history, indent=2)}

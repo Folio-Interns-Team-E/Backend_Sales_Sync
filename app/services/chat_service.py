@@ -178,7 +178,9 @@ class ChatService(ChatAgentsService):
             user_obj = user_res.scalar_one_or_none()
             user_info = {
                 "full_name": user_obj.full_name if user_obj else "Unknown",
-                "email": user_obj.email if user_obj else "Unknown"
+                "email": user_obj.email if user_obj else "Unknown",
+                "company": getattr(user_obj, "company", None) or "Not specified",
+                "job_title": getattr(user_obj, "job_title", None) or "Not specified",
             }
 
             # 2. Fetch the Last 5 Chat Messages for Context (Prior to storing new incoming)

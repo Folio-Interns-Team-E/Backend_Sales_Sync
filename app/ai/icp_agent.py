@@ -4,6 +4,7 @@ import json
 import logging
 import httpx
 from app.config import settings
+from app.ai.product_context import SALESYNC_PRODUCT_CONTEXT
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,11 @@ class ICPAgent:
         """
         Takes raw user input and structures it into a comprehensive, professional B2B ICP markdown format.
         """
-        system_prompt = """
+        system_prompt = f"""
             You are an expert B2B Go-To-Market (GTM) and Sales Strategy Consultant.
+
+            PRODUCT IDENTITY (NON-NEGOTIABLE):
+            {SALESYNC_PRODUCT_CONTEXT}
 
             Your task is to transform a user's raw, unstructured description of an Ideal Customer Profile (ICP) into a complete, structured, and professional ICP.
 

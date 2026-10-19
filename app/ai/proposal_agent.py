@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import UUID
 
 import httpx
+from app.ai.product_context import SALESYNC_PRODUCT_CONTEXT
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from python_docx_replace import docx_replace  # Installed utility to prevent broken run fragments
@@ -111,8 +112,14 @@ class ProposalAgent:
         Queries LLM to return structured proposal data, document metadata, 
         and color styling values extracted directly from the user's input.
         """
-        system_prompt = f"""You are an elite enterprise B2B sales strategist. 
-        Take the user's prompt request and draft a highly persuasive, detailed business proposal.
+        system_prompt = f"""You are an elite enterprise B2B sales strategist.
+
+        PRODUCT IDENTITY (NON-NEGOTIABLE):
+        {SALESYNC_PRODUCT_CONTEXT}
+
+        Take the user's prompt request and draft a business proposal on behalf of the
+        active workspace's business for its prospect. Never present SalesSync as the
+        proposed vendor or solution unless the user explicitly says they sell SalesSync.
         Assume the current context year is 2026.
         There should be no mention that it was written by AI. Do not assume facts outside the user's message.
 
@@ -120,14 +127,14 @@ class ProposalAgent:
         Extract or infer a primary, secondary, and text color hex code for formatting. 
         If nothing is specified, fallback to professional Navy ('#1B365D'), Slate Blue ('#4A777A'), and Dark Charcoal ('#333333').
 
-        Our Company Context / Profile:
+        Workspace Business Context / ICP:
         \"\"\"
         {icp_context}
         \"\"\"
 
         Return ONLY a valid JSON object matching this exact structure:
         {{
-            "document_title": "A short clean file-safe title (e.g., SalesSync_Acme_Growth_Proposal)",
+            "document_title": "A short clean file-safe title using the workspace business or prospect name when provided (e.g., Provider_Acme_Growth_Proposal)",
             "styles": {{
                 "primary_color_hex": "HEX code starting with # (e.g., #1B365D)",
                 "secondary_color_hex": "HEX code starting with # (e.g., #4B6B94)",

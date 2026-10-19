@@ -4,6 +4,7 @@ import json
 import re
 import logging
 import httpx
+from app.ai.product_context import SALESYNC_PRODUCT_CONTEXT
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -98,8 +99,13 @@ class EmailAgent:
                 Rewrite the email from scratch, fixing these issues while still following all rules below.
             """
 
-        prompt = f"""You are an elite, hyper-efficient B2B sales development representative. 
-            Write a highly tailored, razor-sharp cold outreach email to the target lead below based on our company's Ideal Customer Profile (ICP).
+        prompt = f"""You are an elite, hyper-efficient B2B sales development representative.
+
+            PRODUCT IDENTITY (NON-NEGOTIABLE):
+            {SALESYNC_PRODUCT_CONTEXT}
+
+            Write a highly tailored, razor-sharp cold outreach email on behalf of the
+            active workspace's business, based on that business's Ideal Customer Profile (ICP).
             {revision_block}
             Company ICP Context:
             \"\"\"
@@ -119,7 +125,7 @@ class EmailAgent:
             3. No Clichés: Never start with "Hope this email finds you well," "My name is," or "I stumbled upon your profile." Start directly with a relevant hook.
             4. Structure: 
             - Paragraph 1 (The Hook): A highly specific, personalized observation about their role, recent company news, or a current pain point.
-            - Paragraph 2 (The Value): Connect our value proposition (from our ICP) directly to solving that specific challenge in one clear sentence.
+            - Paragraph 2 (The Value): Connect the workspace business's value proposition (from its ICP) directly to solving that specific challenge in one clear sentence. If the ICP does not state a value proposition, do not invent one.
             - Paragraph 3 (Low-Friction CTA): Ask a single open-ended, low-commitment question.
 
             Example of Perfect Formatting (Copy this structure exactly):
