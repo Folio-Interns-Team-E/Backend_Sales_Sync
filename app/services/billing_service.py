@@ -51,8 +51,22 @@ class BillingService:
                 )
             response.raise_for_status()
             return response
-        except httpx.HTTPError as exc:
-            raise HTTPException(status_code=502, detail="Safepay request failed") from exc
+        except httpx.HTTPStatusError as exc:
+            if path == "/order/payments/v3/" and exc.response.status_code >= 500:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Safepay could not create the checkout. Confirm that SAFEPAY_PUBLIC_KEY "
+                        "is the client/merchant key (sec_...), SAFEPAY_SECRET_KEY is the server "
+                        "key, and both keys belong to the configured Safepay environment."
+                    ),
+                ) from exc
+            raise HTTPException(
+                status_code=502,
+                detail=f"Safepay rejected the checkout request (HTTP {exc.response.status_code})",
+            ) from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail="Could not connect to Safepay") from exc
 
     async def create_checkout_session(self, team_id: UUID, tier: str) -> str:
         team = await self._get_team(team_id)
@@ -60,6 +74,11 @@ class BillingService:
         amount = self._amount(tier)
         if not settings.safepay_public_key:
             raise HTTPException(status_code=503, detail="Safepay public key is not configured")
+        if not settings.safepay_public_key.startswith("sec_"):
+            raise HTTPException(
+                status_code=503,
+                detail="SAFEPAY_PUBLIC_KEY must be the Safepay client/merchant key beginning with sec_",
+            )
         reference = f"salesync_{team.id.hex}_{uuid4().hex}"
         payment_response = await self._request("POST", "/order/payments/v3/", json={
             "merchant_api_key": settings.safepay_public_key,
