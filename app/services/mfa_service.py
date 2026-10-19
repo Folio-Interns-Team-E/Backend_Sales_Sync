@@ -86,7 +86,7 @@ async def begin_setup(user: User) -> MfaSetupResponse:
     except ValueError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "MFA encryption is not configured") from exc
     client.set(_setup_key(user.id), encrypted, ex=MFA_SETUP_TTL_SECONDS)
-    uri = pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name="SalesSync")
+    uri = pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name="SaleSync")
     return MfaSetupResponse(secret=secret, otpauth_uri=uri, expires_in=MFA_SETUP_TTL_SECONDS)
 
 

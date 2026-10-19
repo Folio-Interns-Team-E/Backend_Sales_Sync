@@ -1,6 +1,6 @@
 # Request rate limiting
 
-SalesSync protects security-sensitive and provider-backed operations with Redis fixed-window limits. Limiter keys contain only truncated SHA-256 identity hashes; raw IP addresses, user IDs, and workspace IDs are not stored in keys.
+SaleSync protects security-sensitive and provider-backed operations with Redis fixed-window limits. Limiter keys contain only truncated SHA-256 identity hashes; raw IP addresses, user IDs, and workspace IDs are not stored in keys.
 
 ## Protected operations
 

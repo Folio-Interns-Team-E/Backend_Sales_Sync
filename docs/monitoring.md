@@ -1,6 +1,6 @@
 # Production monitoring
 
-SalesSync supports optional Sentry error and performance monitoring. The API still starts normally when no DSN is configured.
+SaleSync supports optional Sentry error and performance monitoring. The API still starts normally when no DSN is configured.
 
 ## Backend setup (Railway)
 

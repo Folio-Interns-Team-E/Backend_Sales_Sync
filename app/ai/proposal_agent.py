@@ -118,8 +118,8 @@ class ProposalAgent:
         {SALESYNC_PRODUCT_CONTEXT}
 
         Take the user's prompt request and draft a business proposal on behalf of the
-        active workspace's business for its prospect. Never present SalesSync as the
-        proposed vendor or solution unless the user explicitly says they sell SalesSync.
+        active workspace's business for its prospect. Never present SaleSync as the
+        proposed vendor or solution unless the user explicitly says they sell SaleSync.
         Assume the current context year is 2026.
         There should be no mention that it was written by AI. Do not assume facts outside the user's message.
 

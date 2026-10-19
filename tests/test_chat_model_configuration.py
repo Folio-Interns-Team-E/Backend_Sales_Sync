@@ -67,7 +67,7 @@ def test_supervisor_rejects_unknown_actions_and_invalid_limits_safely():
 def test_email_quality_gate_rejects_unusable_drafts():
     valid = {
         "subject": "Pipeline review",
-        "body": "Your team is scaling outbound at Acme.\n\nSalesSync helps reps automate qualified follow-up.\n\nWould comparing workflows be useful?",
+        "body": "Your team is scaling outbound at Acme.\n\nSaleSync helps reps automate qualified follow-up.\n\nWould comparing workflows be useful?",
     }
     invalid = {
         "subject": "A very long and clickbait subject",

@@ -172,7 +172,7 @@ class MeetingAgent:
                 f"Attendee: {lead.name} ({lead.email or 'No email'})\n"
                 f"Time: {start_time_dt.strftime('%Y-%m-%d %I:%M %p')} ({timezone_name})\n\n"
                 f"Google Meet link: {meeting.meet_url}\n"
-                "The meeting is on your Google Calendar and in SalesSync. Share the link with the prospect when ready."
+                "The meeting is on your Google Calendar and in SaleSync. Share the link with the prospect when ready."
             )
         except Exception as e:
             logger.error("Google Calendar meeting creation failed: %s", e, exc_info=True)
@@ -241,7 +241,7 @@ class MeetingAgent:
                 active_meeting.status = MeetingStatus.CANCELLED.value
                 await self.db.commit()
             else:
-                return "This legacy meeting was booked outside Google Calendar. Cancel it with the original provider; SalesSync cannot cancel it remotely."
+                return "This legacy meeting was booked outside Google Calendar. Cancel it with the original provider; SaleSync cannot cancel it remotely."
 
             meeting_time_str = f"{active_meeting.date} {active_meeting.time}"
             return (

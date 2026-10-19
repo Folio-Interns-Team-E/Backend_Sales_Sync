@@ -83,8 +83,8 @@ async def test_authenticator_setup_round_trip_enables_mfa():
             db,
         )
 
-    assert setup.otpauth_uri.startswith("otpauth://totp/SalesSync:")
-    assert "issuer=SalesSync" in setup.otpauth_uri
+    assert setup.otpauth_uri.startswith("otpauth://totp/SaleSync:")
+    assert "issuer=SaleSync" in setup.otpauth_uri
     assert account.mfa_enabled is True
     assert account.mfa_secret_encrypted == setup.secret
     assert len(response.recovery_codes) == mfa_service.RECOVERY_CODE_COUNT

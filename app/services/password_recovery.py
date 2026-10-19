@@ -33,8 +33,8 @@ def send_reset_email(email: str, token: str):
     resend.Emails.send({
         "from": settings.FROM_EMAIL,
         "to": [email],
-        "subject": "Reset your SalesSync password",
-        "text": f"Enter this recovery code on the SalesSync password recovery page:\n\n{token}\n\n"
+        "subject": "Reset your SaleSync password",
+        "text": f"Enter this recovery code on the SaleSync password recovery page:\n\n{token}\n\n"
                 "It expires in 15 minutes and can be used once. If you did not request this, ignore this email.",
     })
 

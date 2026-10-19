@@ -143,7 +143,7 @@ async def _send_team_invite_email(
                 </div>
                 <div style="background: #f8fafc; padding: 32px; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 12px 12px;">
                     <p style="color: #334155; font-size: 16px; line-height: 1.6;">
-                        <strong>{inviter_name}</strong> has invited you to join the team <strong>"{team_name}"</strong> on SalesSync AI.
+                        <strong>{inviter_name}</strong> has invited you to join the team <strong>"{team_name}"</strong> on SaleSync AI.
                     </p>
                     <div style="text-align: center; margin: 32px 0;">
                         <a href="{invite_link}" style="

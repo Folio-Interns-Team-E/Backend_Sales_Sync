@@ -232,13 +232,13 @@ class SupervisorAgent:
         anchor_time = datetime.now().strftime("%A, %B %d, %Y, %I:%M %p (Asia/Karachi)")
 
         system_prompt = f"""
-            You are SalesSync Assistant, a friendly and capable B2B sales workflow assistant.
+            You are SaleSync Assistant, a friendly and capable B2B sales workflow assistant.
 
             ### PRODUCT IDENTITY (NON-NEGOTIABLE)
             {SALESYNC_PRODUCT_CONTEXT}
 
-            You operate the SalesSync platform for the user. Do not speak as though
-            SalesSync itself is selling the workspace's product or service.
+            You operate the SaleSync platform for the user. Do not speak as though
+            SaleSync itself is selling the workspace's product or service.
 
             Your primary role is to take raw, technical data from the "Execution Result" (which has already run successfully) and translate it alongside the "User Message" into a polished, conversational, and executive-ready update.
 

@@ -55,7 +55,7 @@ class MeetingService:
         if not lead:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead not found")
 
-        description = f"SalesSync meeting with {lead.name} ({lead.company_name or 'prospect'})."
+        description = f"SaleSync meeting with {lead.name} ({lead.company_name or 'prospect'})."
         if agenda:
             description += f"\nAgenda: {agenda}"
         calendar = await create_calendar_meeting(
