@@ -3,7 +3,8 @@ import hmac
 import json
 
 from app.config import settings
-from app.routers.billing import _tier_for_plan, _timestamp, _valid_signature
+from app.routers.billing import _timestamp, _valid_signature
+from app.services.billing_service import BillingService
 
 
 def test_safepay_raw_body_signature(monkeypatch):
@@ -17,15 +18,11 @@ def test_safepay_raw_body_signature(monkeypatch):
     assert not _valid_signature(raw, payload, "0" * 64)
 
 
-def test_safepay_plan_ids_map_to_internal_tiers(monkeypatch):
-    monkeypatch.setattr(settings, "safepay_plus_plan_id", "plan_plus")
-    monkeypatch.setattr(settings, "safepay_pro_plan_id", "plan_pro")
-
-    assert _tier_for_plan("plan_plus") == "plus"
-    assert _tier_for_plan("plan_pro") == "pro"
-    assert _tier_for_plan("plan_unknown") is None
-
-
 def test_safepay_protobuf_timestamp_conversion():
     result = _timestamp({"seconds": 1_700_000_000, "nanos": 1})
     assert result.timestamp() == 1_700_000_000
+
+
+def test_manual_plan_prices_are_stored_in_paisas():
+    assert BillingService._amount("plus") == 3_000_000
+    assert BillingService._amount("pro") == 6_000_000

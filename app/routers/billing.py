@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -50,18 +50,9 @@ def _valid_signature(raw_body: bytes, payload: dict, received: str | None) -> bo
     return hmac.compare_digest(current, received) or hmac.compare_digest(legacy, received)
 
 
-def _tier_for_plan(plan_id: str | None) -> str | None:
-    mapping = {
-        settings.safepay_plus_plan_id: SubscriptionTier.PLUS.value,
-        settings.safepay_pro_plan_id: SubscriptionTier.PRO.value,
-    }
-    return mapping.get(plan_id) if plan_id else None
-
-
 async def _find_subscription(db: AsyncSession, data: dict) -> Subscription | None:
-    reference = data.get("reference")
-    subscription_id = data.get("subscription_id") or data.get("sub_id") or data.get("id")
-    identifiers = [value for value in (reference, subscription_id) if value]
+    tracker = data.get("tracker")
+    identifiers = [tracker] if tracker else []
     if not identifiers:
         return None
     return await db.scalar(
@@ -83,52 +74,47 @@ async def safepay_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 
     event_type = str(event.get("type", ""))
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
-    if not event_type.startswith("subscription."):
+    if event_type not in {"payment.succeeded", "payment.failed", "payment.refunded"}:
         return {"status": "ignored"}
     subscription = await _find_subscription(db, data)
     if not subscription:
         return {"status": "ignored"}
 
-    subscription_id = data.get("subscription_id") or data.get("sub_id") or data.get("id")
-    plan_id = data.get("plan_id")
-    tier = _tier_for_plan(plan_id) or normalize_tier(subscription.tier)
+    tracker = data.get("tracker")
+    tier = normalize_tier(subscription.tier)
     now = datetime.now(timezone.utc)
-    period_start = _timestamp(data.get("current_period_start_date"), subscription.current_period_start)
-    period_end = _timestamp(data.get("current_period_end_date"), subscription.current_period_end)
     team = await db.scalar(select(Team).where(Team.id == subscription.team_id))
     if not team:
         return {"status": "ignored"}
 
-    if subscription_id:
-        subscription.stripe_subscription_id = str(subscription_id)
-        team.stripe_subscription_id = str(subscription_id)
-    if plan_id:
-        subscription.stripe_price_id = str(plan_id)
-    subscription.tier = tier
-    subscription.current_period_start = period_start
-    subscription.current_period_end = period_end
+    if tracker:
+        team.stripe_subscription_id = str(tracker)
 
-    if event_type == "subscription.created":
-        subscription.status = "pending"
-    elif event_type == "subscription.payment.succeeded":
+    expected_amount = {"plus": 3_000_000, "pro": 6_000_000}.get(tier)
+    if event_type == "payment.succeeded":
+        if data.get("currency") != "PKR" or data.get("amount") != expected_amount:
+            raise HTTPException(status_code=400, detail="Payment amount does not match the selected plan")
+        current_end = team.subscription_ends_at
+        period_start = current_end if current_end and current_end > now else now
+        period_end = period_start + timedelta(days=30)
         subscription.status = SubscriptionStatus.ACTIVE.value
         subscription.cancel_at_period_end = False
+        subscription.current_period_start = period_start
+        subscription.current_period_end = period_end
         team.subscription_tier = tier
         team.subscription_status = SubscriptionStatus.ACTIVE.value
         team.subscription_ends_at = period_end
-    elif event_type == "subscription.payment.failed":
-        subscription.status = SubscriptionStatus.PAST_DUE.value
-        team.subscription_status = SubscriptionStatus.PAST_DUE.value
-    elif event_type in {"subscription.cancelled", "subscription.canceled", "subscription.ended"}:
+    elif event_type == "payment.failed":
+        subscription.status = "failed"
+    elif event_type == "payment.refunded":
         subscription.status = SubscriptionStatus.CANCELED.value
-        subscription.canceled_at = _timestamp(data.get("canceled_at"), now)
+        subscription.canceled_at = now
         subscription.ended_at = now
-        team.subscription_tier = SubscriptionTier.FREE.value
-        team.subscription_status = SubscriptionStatus.CANCELED.value
-        team.subscription_ends_at = now
-        team.stripe_subscription_id = None
-    else:
-        return {"status": "ignored"}
+        if team.stripe_subscription_id == tracker:
+            team.subscription_tier = SubscriptionTier.FREE.value
+            team.subscription_status = SubscriptionStatus.CANCELED.value
+            team.subscription_ends_at = now
+            team.stripe_subscription_id = None
 
     await db.commit()
     return {"status": "ok"}

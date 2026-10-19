@@ -52,8 +52,13 @@ def month_start() -> datetime:
 
 
 async def get_team_tier(db: AsyncSession, team_id: UUID) -> str:
-    tier = await db.scalar(select(Team.subscription_tier).where(Team.id == team_id))
-    return normalize_tier(tier)
+    team = await db.scalar(select(Team).where(Team.id == team_id))
+    if not team:
+        return "free"
+    tier = normalize_tier(team.subscription_tier)
+    if tier != "free" and team.subscription_ends_at and team.subscription_ends_at <= datetime.now(timezone.utc):
+        return "free"
+    return tier
 
 
 async def get_usage(db: AsyncSession, team_id: UUID) -> dict[str, int]:

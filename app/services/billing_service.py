@@ -29,13 +29,11 @@ class BillingService:
         return team
 
     @staticmethod
-    def _plan_id(tier: str) -> str:
-        plans = {"plus": settings.safepay_plus_plan_id, "pro": settings.safepay_pro_plan_id}
-        if tier not in plans:
+    def _amount(tier: str) -> int:
+        amounts = {"plus": 3_000_000, "pro": 6_000_000}  # PKR paisas
+        if tier not in amounts:
             raise HTTPException(status_code=400, detail="Invalid tier")
-        if not plans[tier]:
-            raise HTTPException(status_code=503, detail=f"{tier.title()} checkout is not configured")
-        return plans[tier]
+        return amounts[tier]
 
     @staticmethod
     async def _request(method: str, path: str, **kwargs) -> httpx.Response:
@@ -59,18 +57,30 @@ class BillingService:
     async def create_checkout_session(self, team_id: UUID, tier: str) -> str:
         team = await self._get_team(team_id)
         tier = normalize_tier(tier)
-        plan_id = self._plan_id(tier)
-        if team.subscription_tier == tier and team.subscription_status == SubscriptionStatus.ACTIVE.value:
-            raise HTTPException(status_code=409, detail=f"Workspace is already on the {tier.title()} plan")
-
-        # Safepay returns this reference in subscription webhooks. Persist it before
-        # redirecting so a fast webhook can always be correlated to the workspace.
+        amount = self._amount(tier)
+        if not settings.safepay_public_key:
+            raise HTTPException(status_code=503, detail="Safepay public key is not configured")
         reference = f"salesync_{team.id.hex}_{uuid4().hex}"
+        payment_response = await self._request("POST", "/order/payments/v3/", json={
+            "merchant_api_key": settings.safepay_public_key,
+            "intent": "CYBERSOURCE",
+            "mode": "payment",
+            "entry_mode": "raw",
+            "currency": "PKR",
+            "amount": amount,
+            "metadata": {"order_id": reference, "team_id": str(team.id), "tier": tier},
+            "include_fees": False,
+        })
+        tracker = payment_response.json().get("data", {}).get("tracker", {}).get("token")
+        if not isinstance(tracker, str) or not tracker.startswith("track_"):
+            raise HTTPException(status_code=502, detail="Safepay returned an invalid payment tracker")
+
+        # Persist the tracker before redirecting so the webhook can be correlated.
         now = datetime.now(timezone.utc)
         self.db.add(Subscription(
             team_id=team.id,
-            stripe_subscription_id=reference,
-            stripe_price_id=plan_id,
+            stripe_subscription_id=tracker,
+            stripe_price_id=f"manual-{tier}",
             tier=tier,
             status="pending",
             current_period_start=now,
@@ -85,33 +95,18 @@ class BillingService:
 
         frontend = _frontend_base().rstrip("/")
         params = urlencode({
-            "plan_id": plan_id,
-            "auth_token": auth_token,
-            "env": settings.safepay_env,
-            "reference": reference,
+            "environment": settings.safepay_env,
+            "tracker": tracker,
+            "tbt": auth_token,
+            "source": "hosted",
             "redirect_url": f"{frontend}/success",
             "cancel_url": f"{frontend}/billing/cancel",
         })
-        return f"{settings.safepay_checkout_host.rstrip('/')}/checkout/subscribe?{params}"
+        return f"{settings.safepay_checkout_host.rstrip('/')}/embedded/?{params}"
 
     async def cancel_subscription(self, team_id: UUID):
-        team = await self._get_team(team_id)
-        active_sub = await self.db.scalar(
-            select(Subscription)
-            .where(
-                Subscription.team_id == team.id,
-                Subscription.status.in_([SubscriptionStatus.ACTIVE.value, SubscriptionStatus.TRIALING.value]),
-            )
-            .order_by(Subscription.created_at.desc())
-        )
-        subscription_id = active_sub.stripe_subscription_id if active_sub else team.stripe_subscription_id
-        if not subscription_id or not subscription_id.startswith("sub_"):
-            raise HTTPException(status_code=400, detail="No active Safepay subscription found")
-        await self._request("POST", f"/client/subscriptions/v1/{subscription_id}/cancel", json={})
-        if active_sub:
-            active_sub.cancel_at_period_end = True
-        await self.db.commit()
-        return {"message": "Subscription cancellation requested"}
+        await self._get_team(team_id)
+        raise HTTPException(status_code=400, detail="This plan does not auto-renew and does not need cancellation")
 
     async def get_subscription_status(self, team_id: UUID):
         team = await self._get_team(team_id)
@@ -119,7 +114,7 @@ class BillingService:
         latest_sub = await self.db.scalar(
             select(Subscription).where(Subscription.team_id == team.id).order_by(Subscription.created_at.desc())
         )
-        if latest_sub and latest_sub.status != "pending":
+        if latest_sub and latest_sub.status == SubscriptionStatus.ACTIVE.value and snapshot["tier"] != "free":
             return {
                 "tier": normalize_tier(latest_sub.tier),
                 "status": latest_sub.status,
@@ -130,7 +125,11 @@ class BillingService:
             }
         return {
             "tier": snapshot["tier"],
-            "status": getattr(team, "subscription_status", SubscriptionStatus.ACTIVE.value),
+            "status": (
+                "expired"
+                if normalize_tier(team.subscription_tier) != "free" and snapshot["tier"] == "free"
+                else getattr(team, "subscription_status", SubscriptionStatus.ACTIVE.value)
+            ),
             "ends_at": getattr(team, "subscription_ends_at", None),
             "cancel_at_period_end": False,
             "limits": snapshot["limits"],
