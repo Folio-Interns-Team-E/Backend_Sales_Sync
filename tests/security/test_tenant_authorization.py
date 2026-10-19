@@ -22,7 +22,7 @@ def test_path_team_must_match_authenticated_team_context() -> None:
     assert exc_info.value.status_code == 400
 
 
-def test_stripe_session_must_belong_to_active_team() -> None:
+def test_checkout_must_belong_to_active_team() -> None:
     context = TeamContext(team_id=uuid4(), role=MemberRole.admin)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -31,7 +31,7 @@ def test_stripe_session_must_belong_to_active_team() -> None:
     assert exc_info.value.status_code == 403
 
 
-def test_valid_stripe_session_team_is_normalized() -> None:
+def test_valid_checkout_team_is_normalized() -> None:
     team_id = uuid4()
     context = TeamContext(team_id=team_id, role=MemberRole.admin)
 

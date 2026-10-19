@@ -14,7 +14,7 @@ class SubscriptionTier(str, enum.Enum):
 
 class SubscriptionStatus(str, enum.Enum):
     ACTIVE = "active"
-    CANCELED = "canceled" # Note: Stripe spells it "canceled" (one 'l')
+    CANCELED = "canceled"
     PAST_DUE = "past_due"
     UNPAID = "unpaid"
     TRIALING = "trialing"
@@ -32,9 +32,10 @@ class Subscription(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"), nullable=False)
     
-    # Stripe identifiers
+    # Legacy column names are retained for a zero-downtime provider migration. They now
+    # store Safepay subscription and plan identifiers.
     stripe_subscription_id = Column(String, nullable=False, unique=True)
-    stripe_price_id = Column(String, nullable=False) # Maps to the product tier
+    stripe_price_id = Column(String, nullable=False)
     
     # State tracking
     tier = Column(String, default=SubscriptionTier.FREE.value, nullable=False)
@@ -67,7 +68,7 @@ class Invoice(Base):
     stripe_invoice_id = Column(String, nullable=False, unique=True)
     stripe_payment_intent_id = Column(String, nullable=True) # For tracking specific charges
     
-    amount_due = Column(Integer, nullable=False) # Store in cents (Stripe default)
+    amount_due = Column(Integer, nullable=False) # Lowest currency unit (paisas for PKR)
     amount_paid = Column(Integer, nullable=False)
     currency = Column(String, default="usd", nullable=False)
     status = Column(String, nullable=False) # paid, open, void, uncollectible
@@ -75,6 +76,6 @@ class Invoice(Base):
     hosted_invoice_url = Column(String, nullable=True) # Great for "Download Invoice" buttons
     invoice_pdf = Column(String, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), nullable=False) # When stripe generated it
+    created_at = Column(DateTime(timezone=True), nullable=False)
 
     team = relationship("Team", back_populates="invoices")

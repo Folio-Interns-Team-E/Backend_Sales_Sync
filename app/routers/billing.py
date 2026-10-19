@@ -1,311 +1,149 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
-from pydantic import BaseModel
+import hashlib
+import hmac
+import json
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from datetime import datetime, timezone
-from uuid import UUID
-import stripe
 
-from app.database import get_db
 from app.config import settings
+from app.database import get_db
+from app.middleware.auth_middleware import TeamContext, get_team_context, require_role
+from app.models.subscription import Subscription, SubscriptionStatus, SubscriptionTier
 from app.models.team import Team
-from app.models.subscription import Subscription, Invoice, SubscriptionStatus, SubscriptionTier
-from app.services.billing_service import BillingService
-from app.middleware.auth_middleware import get_team_context, require_role, TeamContext
 from app.models.team_member import MemberRole
+from app.services.billing_service import BillingService
 from app.services.plan_service import normalize_tier
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
-stripe.api_key = settings.stripe_secret_key
+
+def _validate_checkout_team(metadata_team_id: object, team_ctx: TeamContext) -> UUID:
+    """Compatibility guard for provider callbacks carrying a workspace identifier."""
+    try:
+        checkout_team_id = UUID(str(metadata_team_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid team_id in checkout metadata") from exc
+    if checkout_team_id != team_ctx.team_id:
+        raise HTTPException(status_code=403, detail="Checkout does not belong to the active team")
+    return checkout_team_id
+
+
+def _timestamp(value: Any, fallback: datetime | None = None) -> datetime:
+    if isinstance(value, dict):
+        value = value.get("seconds")
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return fallback or datetime.now(timezone.utc)
+
+
+def _valid_signature(raw_body: bytes, payload: dict, received: str | None) -> bool:
+    if not settings.safepay_webhook_secret or not received:
+        return False
+    current = hmac.new(settings.safepay_webhook_secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    legacy_body = json.dumps(payload.get("data", {}), separators=(",", ":")).encode()
+    legacy = hmac.new(settings.safepay_webhook_secret.encode(), legacy_body, hashlib.sha512).hexdigest()
+    return hmac.compare_digest(current, received) or hmac.compare_digest(legacy, received)
+
+
+def _tier_for_plan(plan_id: str | None) -> str | None:
+    mapping = {
+        settings.safepay_plus_plan_id: SubscriptionTier.PLUS.value,
+        settings.safepay_pro_plan_id: SubscriptionTier.PRO.value,
+    }
+    return mapping.get(plan_id) if plan_id else None
+
+
+async def _find_subscription(db: AsyncSession, data: dict) -> Subscription | None:
+    reference = data.get("reference")
+    subscription_id = data.get("subscription_id") or data.get("sub_id") or data.get("id")
+    identifiers = [value for value in (reference, subscription_id) if value]
+    if not identifiers:
+        return None
+    return await db.scalar(
+        select(Subscription)
+        .where(Subscription.stripe_subscription_id.in_(identifiers))
+        .order_by(Subscription.created_at.desc())
+    )
 
 
 @router.post("/webhook")
-async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-    
+async def safepay_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    raw_body = await request.body()
     try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, settings.stripe_webhook_secret
-        )
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid payload")
-    except stripe.error.SignatureVerificationError:
-        raise HTTPException(status_code=400, detail="Invalid signature")
-    
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        team_id = session["metadata"]["team_id"]
-        tier = session["metadata"]["tier"]
-        if normalize_tier(tier) != tier or tier not in {"plus", "pro"}:
-            raise HTTPException(status_code=400, detail="Invalid subscription tier")
-        stripe_subscription_id = session["subscription"]
-        
-        result = await db.execute(select(Team).where(Team.id == team_id))
-        team = result.scalar_one_or_none()
-        if not team:
-            return {"status": "ok"}
+        event = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload") from exc
+    if not _valid_signature(raw_body, event, request.headers.get("x-sfpy-signature")):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-        team.stripe_subscription_id = stripe_subscription_id
+    event_type = str(event.get("type", ""))
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    if not event_type.startswith("subscription."):
+        return {"status": "ignored"}
+    subscription = await _find_subscription(db, data)
+    if not subscription:
+        return {"status": "ignored"}
+
+    subscription_id = data.get("subscription_id") or data.get("sub_id") or data.get("id")
+    plan_id = data.get("plan_id")
+    tier = _tier_for_plan(plan_id) or normalize_tier(subscription.tier)
+    now = datetime.now(timezone.utc)
+    period_start = _timestamp(data.get("current_period_start_date"), subscription.current_period_start)
+    period_end = _timestamp(data.get("current_period_end_date"), subscription.current_period_end)
+    team = await db.scalar(select(Team).where(Team.id == subscription.team_id))
+    if not team:
+        return {"status": "ignored"}
+
+    if subscription_id:
+        subscription.stripe_subscription_id = str(subscription_id)
+        team.stripe_subscription_id = str(subscription_id)
+    if plan_id:
+        subscription.stripe_price_id = str(plan_id)
+    subscription.tier = tier
+    subscription.current_period_start = period_start
+    subscription.current_period_end = period_end
+
+    if event_type == "subscription.created":
+        subscription.status = "pending"
+    elif event_type == "subscription.payment.succeeded":
+        subscription.status = SubscriptionStatus.ACTIVE.value
+        subscription.cancel_at_period_end = False
         team.subscription_tier = tier
         team.subscription_status = SubscriptionStatus.ACTIVE.value
-
-        sub_result = await db.execute(
-            select(Subscription).where(Subscription.stripe_subscription_id == stripe_subscription_id)
-        )
-        existing_sub = sub_result.scalar_one_or_none()
-
-        stripe_sub = await stripe.Subscription.retrieve_async(stripe_subscription_id)
-        period_end = datetime.fromtimestamp(stripe_sub["current_period_end"], tz=timezone.utc)
-
-        if existing_sub:
-            existing_sub.tier = tier
-            existing_sub.status = SubscriptionStatus.ACTIVE.value
-            existing_sub.current_period_end = period_end
-            existing_sub.cancel_at_period_end = False
-        else:
-            new_sub = Subscription(
-                team_id=team_id,
-                stripe_subscription_id=stripe_subscription_id,
-                stripe_price_id=stripe_sub["items"]["data"][0]["price"]["id"],
-                tier=tier,
-                status=SubscriptionStatus.ACTIVE.value,
-                current_period_start=datetime.fromtimestamp(stripe_sub["current_period_start"], tz=timezone.utc),
-                current_period_end=period_end,
-            )
-            db.add(new_sub)
-
         team.subscription_ends_at = period_end
-        await db.commit()
-    
-    elif event["type"] == "customer.subscription.deleted":
-        subscription = event["data"]["object"]
-        result = await db.execute(
-            select(Team).where(Team.stripe_subscription_id == subscription["id"])
-        )
-        team = result.scalar_one_or_none()
-        if team:
-            team.subscription_tier = SubscriptionTier.FREE.value
-            team.subscription_status = SubscriptionStatus.CANCELED.value
-            team.stripe_subscription_id = None
+    elif event_type == "subscription.payment.failed":
+        subscription.status = SubscriptionStatus.PAST_DUE.value
+        team.subscription_status = SubscriptionStatus.PAST_DUE.value
+    elif event_type in {"subscription.cancelled", "subscription.canceled", "subscription.ended"}:
+        subscription.status = SubscriptionStatus.CANCELED.value
+        subscription.canceled_at = _timestamp(data.get("canceled_at"), now)
+        subscription.ended_at = now
+        team.subscription_tier = SubscriptionTier.FREE.value
+        team.subscription_status = SubscriptionStatus.CANCELED.value
+        team.subscription_ends_at = now
+        team.stripe_subscription_id = None
+    else:
+        return {"status": "ignored"}
 
-        sub_result = await db.execute(
-            select(Subscription).where(Subscription.stripe_subscription_id == subscription["id"])
-        )
-        sub = sub_result.scalar_one_or_none()
-        if sub:
-            sub.status = SubscriptionStatus.CANCELED.value
-            ended_at = subscription["ended_at"]
-            if ended_at:
-                sub.ended_at = datetime.fromtimestamp(ended_at, tz=timezone.utc)
-
-        await db.commit()
-    
-    elif event["type"] == "invoice.payment_failed":
-        invoice = event["data"]["object"]
-        result = await db.execute(
-            select(Team).where(Team.stripe_customer_id == invoice["customer"])
-        )
-        team = result.scalar_one_or_none()
-        if team:
-            team.subscription_status = SubscriptionStatus.PAST_DUE.value
-
-            sub_result = await db.execute(
-                select(Subscription)
-                .where(Subscription.team_id == team.id)
-                .where(Subscription.status == SubscriptionStatus.ACTIVE.value)
-                .order_by(Subscription.created_at.desc())
-            )
-            sub = sub_result.scalar_one_or_none()
-            if sub:
-                sub.status = SubscriptionStatus.PAST_DUE.value
-
-        await db.commit()
-    
+    await db.commit()
     return {"status": "ok"}
 
 
-class CheckoutCompleteRequest(BaseModel):
-    session_id: str
-
-
-def to_clean_dict(obj):
-    if hasattr(obj, "to_dict"):
-        return obj.to_dict()
-    if isinstance(obj, dict):
-        return obj
-    return dict(obj)
-
-
-def _validate_checkout_team(metadata_team_id: object, team_ctx: TeamContext) -> UUID:
-    try:
-        session_team_id = UUID(str(metadata_team_id))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid team_id in session metadata")
-    if session_team_id != team_ctx.team_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Stripe session does not belong to the active team",
-        )
-    return session_team_id
-
-
-@router.post("/checkout/complete")
-async def checkout_complete(
-    body: CheckoutCompleteRequest,
-    team_ctx: TeamContext = Depends(require_role(MemberRole.admin)),
-    db: AsyncSession = Depends(get_db),
-):
-    # 1. Retrieve and normalize Session
-    try:
-        session_obj = await stripe.checkout.Session.retrieve_async(body.session_id)
-        # to_dict() works reliably on all modern Stripe SDK objects
-        session = to_clean_dict(session_obj)
-    except stripe.error.InvalidRequestError:
-        raise HTTPException(status_code=400, detail="Invalid Stripe session")
-
-    if session.get("payment_status") != "paid":
-        raise HTTPException(status_code=400, detail="Payment not completed")
-
-    # 2. Extract Metadata cleanly
-    metadata = session.get("metadata") or {}
-    team_id = metadata.get("team_id")
-    tier = metadata.get("tier")
-    
-    if not team_id:
-        raise HTTPException(status_code=400, detail="Missing team_id in session metadata")
-    if not tier:
-        raise HTTPException(status_code=400, detail="Missing tier in session metadata")
-    if normalize_tier(tier) != tier or tier not in {"plus", "pro"}:
-        raise HTTPException(status_code=400, detail="Invalid tier in session metadata")
-
-    team_id = _validate_checkout_team(team_id, team_ctx)
-
-    stripe_subscription_id = session.get("subscription")
-    if not stripe_subscription_id:
-        raise HTTPException(status_code=400, detail="No subscription in session")
-
-    # 3. Database lookup
-    result = await db.execute(select(Team).where(Team.id == team_id))
-    team = result.scalar_one_or_none()
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-
-    team.stripe_subscription_id = stripe_subscription_id
-    team.subscription_tier = tier
-    team.subscription_status = SubscriptionStatus.ACTIVE.value
-
-    # 4. Retrieve and normalize Subscription
-    sub_obj = await stripe.Subscription.retrieve_async(stripe_subscription_id)
-    stripe_sub = to_clean_dict(sub_obj)
-
-    # Extract price_id safely
-    items_data = stripe_sub.get("items", {}).get("data", [])
-    first_item = to_clean_dict(items_data[0]) if items_data else {}
-    
-    price_id = None
-    if first_item and "price" in first_item:
-        price_obj = to_clean_dict(first_item["price"])
-        price_id = price_obj.get("id")
-
-    # Safely retrieve period timestamps
-    period_start_ts = stripe_sub.get("current_period_start")
-    period_end_ts = stripe_sub.get("current_period_end")
-
-    if not period_start_ts and first_item:
-        period_start_ts = first_item.get("current_period_start")
-        period_end_ts = first_item.get("current_period_end")
-
-    now = datetime.now(timezone.utc)
-    period_start = datetime.fromtimestamp(period_start_ts, tz=timezone.utc) if period_start_ts else now
-    period_end = datetime.fromtimestamp(period_end_ts, tz=timezone.utc) if period_end_ts else now
-    
-    team.subscription_ends_at = period_end
-
-    # 5. Upsert Subscription DB Model
-    sub_result = await db.execute(
-        select(Subscription).where(Subscription.stripe_subscription_id == stripe_subscription_id)
-    )
-    existing_sub = sub_result.scalar_one_or_none()
-
-    if existing_sub and existing_sub.team_id != team_id:
-        raise HTTPException(status_code=409, detail="Subscription belongs to another team")
-
-    if existing_sub:
-        existing_sub.tier = tier
-        existing_sub.status = SubscriptionStatus.ACTIVE.value
-        existing_sub.stripe_price_id = price_id
-        existing_sub.current_period_start = period_start
-        existing_sub.current_period_end = period_end
-        existing_sub.cancel_at_period_end = False
-    else:
-        db.add(Subscription(
-            team_id=team_id,
-            stripe_subscription_id=stripe_subscription_id,
-            stripe_price_id=price_id,
-            tier=tier,
-            status=SubscriptionStatus.ACTIVE.value,
-            current_period_start=period_start,
-            current_period_end=period_end,
-        ))
-
-    # 6. Retrieve and normalize Invoice (if present)
-    invoice_id = session.get("invoice")
-    if invoice_id:
-        try:
-            inv_obj = await stripe.Invoice.retrieve_async(invoice_id)
-            stripe_invoice = to_clean_dict(inv_obj)
-            inv_id = stripe_invoice.get("id")
-            
-            inv_result = await db.execute(
-                select(Invoice).where(Invoice.stripe_invoice_id == inv_id)
-            )
-            if not inv_result.scalar_one_or_none():
-                db.add(Invoice(
-                    team_id=team_id,
-                    stripe_invoice_id=inv_id,
-                    stripe_payment_intent_id=stripe_invoice.get("payment_intent"),
-                    amount_due=stripe_invoice.get("amount_due", 0),
-                    amount_paid=stripe_invoice.get("amount_paid", 0),
-                    currency=stripe_invoice.get("currency", "usd"),
-                    status=stripe_invoice.get("status", "paid"),
-                    hosted_invoice_url=stripe_invoice.get("hosted_invoice_url"),
-                    invoice_pdf=stripe_invoice.get("invoice_pdf"),
-                    created_at=datetime.fromtimestamp(stripe_invoice.get("created"), tz=timezone.utc) if stripe_invoice.get("created") else now,
-                ))
-        except Exception:
-            pass
-
-    await db.commit()
-
-    service = BillingService(db)
-    return await service.get_subscription_status(team_id)
-
 @router.post("/checkout/{tier}")
-async def create_checkout(
-    tier: str,
-    team_ctx: TeamContext = Depends(require_role(MemberRole.admin)),
-    db: AsyncSession = Depends(get_db)
-):
-    service = BillingService(db)
-    url = await service.create_checkout_session(team_ctx.team_id, tier)
-    return {"checkout_url": url}
+async def create_checkout(tier: str, team_ctx: TeamContext = Depends(require_role(MemberRole.admin)), db: AsyncSession = Depends(get_db)):
+    return {"checkout_url": await BillingService(db).create_checkout_session(team_ctx.team_id, tier)}
 
 
 @router.get("/status")
-async def subscription_status(
-    team_ctx: TeamContext = Depends(get_team_context),
-    db: AsyncSession = Depends(get_db)
-):
-    service = BillingService(db)
-    return await service.get_subscription_status(team_ctx.team_id)
+async def subscription_status(team_ctx: TeamContext = Depends(get_team_context), db: AsyncSession = Depends(get_db)):
+    return await BillingService(db).get_subscription_status(team_ctx.team_id)
 
 
 @router.post("/cancel")
-async def cancel_subscription(
-    team_ctx: TeamContext = Depends(require_role(MemberRole.admin)),
-    db: AsyncSession = Depends(get_db)
-):
-    service = BillingService(db)
-    return await service.cancel_subscription(team_ctx.team_id)
+async def cancel_subscription(team_ctx: TeamContext = Depends(require_role(MemberRole.admin)), db: AsyncSession = Depends(get_db)):
+    return await BillingService(db).cancel_subscription(team_ctx.team_id)

@@ -53,13 +53,21 @@ class Settings(BaseSettings):
     sentry_release: str = ""
     sentry_traces_sample_rate: float = Field(default=0.1, ge=0, le=1)
 
-    # stripe
+    # Safepay subscriptions
+    safepay_env: Literal["development", "sandbox", "production"] = "sandbox"
+    safepay_host: str = "https://sandbox.api.getsafepay.com"
+    safepay_checkout_host: str = "https://sandbox.api.getsafepay.com"
+    safepay_public_key: str = ""
+    safepay_secret_key: str = ""
+    safepay_webhook_secret: str = ""
+    safepay_plus_plan_id: str = ""
+    safepay_pro_plan_id: str = ""
+    # Accepted temporarily so existing deployments can remove old variables safely.
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_plus_price: str = ""
     stripe_pro_price: str = ""
-    # Temporary deployment compatibility; remove after production variables are renamed.
     stripe_growth_price: str = ""
     stripe_enterprise_price: str = ""
 

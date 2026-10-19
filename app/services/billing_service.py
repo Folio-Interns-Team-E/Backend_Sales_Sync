@@ -1,15 +1,21 @@
-import stripe
-from uuid import UUID
+from datetime import datetime, timezone
+from urllib.parse import urlencode
+from uuid import UUID, uuid4
+
+import httpx
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from fastapi import HTTPException
 
 from app.config import settings
+from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.team import Team
-from app.models.subscription import Subscription, SubscriptionStatus, SubscriptionTier
 from app.services.plan_service import normalize_tier, plan_snapshot
 
-stripe.api_key = settings.stripe_secret_key
+
+def _frontend_base() -> str:
+    raw = settings.frontend_origins[0] if settings.frontend_origins else "http://localhost:5173"
+    return raw if raw.startswith(("http://", "https://")) else f"https://{raw}"
 
 
 class BillingService:
@@ -17,99 +23,103 @@ class BillingService:
         self.db = db
 
     async def _get_team(self, team_id: UUID) -> Team:
-        result = await self.db.execute(select(Team).where(Team.id == team_id))
-        team = result.scalars().first()
+        team = await self.db.scalar(select(Team).where(Team.id == team_id))
         if not team:
             raise HTTPException(status_code=404, detail="Team not found")
         return team
 
+    @staticmethod
+    def _plan_id(tier: str) -> str:
+        plans = {"plus": settings.safepay_plus_plan_id, "pro": settings.safepay_pro_plan_id}
+        if tier not in plans:
+            raise HTTPException(status_code=400, detail="Invalid tier")
+        if not plans[tier]:
+            raise HTTPException(status_code=503, detail=f"{tier.title()} checkout is not configured")
+        return plans[tier]
+
+    @staticmethod
+    async def _request(method: str, path: str, **kwargs) -> httpx.Response:
+        if not settings.safepay_secret_key:
+            raise HTTPException(status_code=503, detail="Safepay is not configured")
+        headers = dict(kwargs.pop("headers", {}))
+        headers["X-SFPY-MERCHANT-SECRET"] = settings.safepay_secret_key
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.request(
+                    method,
+                    f"{settings.safepay_host.rstrip('/')}{path}",
+                    headers=headers,
+                    **kwargs,
+                )
+            response.raise_for_status()
+            return response
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail="Safepay request failed") from exc
+
     async def create_checkout_session(self, team_id: UUID, tier: str) -> str:
         team = await self._get_team(team_id)
-        
-        price_map = {
-            "plus": settings.stripe_plus_price,
-            "pro": settings.stripe_pro_price,
-        }
-        
-        if tier not in price_map:
-            raise HTTPException(status_code=400, detail="Invalid tier")
-        price_id = price_map[tier]
-        if not price_id:
-            raise HTTPException(status_code=503, detail=f"{tier.title()} checkout is not configured")
-        
-        if not team.stripe_customer_id:
-            customer = await stripe.Customer.create_async(
-                metadata={"team_id": str(team.id)},
-                name=team.name
-            )
-            team.stripe_customer_id = customer.id
-            await self.db.commit()
-        
-        # Extract the base origin
-        raw_origin = settings.frontend_origins[0] if settings.frontend_origins else "http://localhost:8000"
+        tier = normalize_tier(tier)
+        plan_id = self._plan_id(tier)
+        if team.subscription_tier == tier and team.subscription_status == SubscriptionStatus.ACTIVE.value:
+            raise HTTPException(status_code=409, detail=f"Workspace is already on the {tier.title()} plan")
 
-        # Ensure it starts with http:// or https://
-        if not raw_origin.startswith(("http://", "https://")):
-            frontend_base = f"http://{raw_origin}"  # Or https:// depending on env
-        else:
-            frontend_base = raw_origin
+        # Safepay returns this reference in subscription webhooks. Persist it before
+        # redirecting so a fast webhook can always be correlated to the workspace.
+        reference = f"salesync_{team.id.hex}_{uuid4().hex}"
+        now = datetime.now(timezone.utc)
+        self.db.add(Subscription(
+            team_id=team.id,
+            stripe_subscription_id=reference,
+            stripe_price_id=plan_id,
+            tier=tier,
+            status="pending",
+            current_period_start=now,
+            current_period_end=now,
+        ))
+        await self.db.commit()
 
-        session = await stripe.checkout.Session.create_async(
-            customer=team.stripe_customer_id,
-            payment_method_types=["card"],
-            line_items=[{"price": price_id, "quantity": 1}],
-            mode="subscription",
-            success_url=f"{frontend_base}/success?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{frontend_base}/billing/cancel",
-            metadata={"team_id": str(team.id), "tier": tier}
-        )
-        
-        return session.url
+        token_response = await self._request("POST", "/client/passport/v1/token", json={})
+        auth_token = token_response.json().get("data")
+        if not isinstance(auth_token, str) or not auth_token:
+            raise HTTPException(status_code=502, detail="Safepay returned an invalid authorization token")
+
+        frontend = _frontend_base().rstrip("/")
+        params = urlencode({
+            "plan_id": plan_id,
+            "auth_token": auth_token,
+            "env": settings.safepay_env,
+            "reference": reference,
+            "redirect_url": f"{frontend}/success",
+            "cancel_url": f"{frontend}/billing/cancel",
+        })
+        return f"{settings.safepay_checkout_host.rstrip('/')}/checkout/subscribe?{params}"
 
     async def cancel_subscription(self, team_id: UUID):
         team = await self._get_team(team_id)
-        
-        result = await self.db.execute(
+        active_sub = await self.db.scalar(
             select(Subscription)
             .where(
                 Subscription.team_id == team.id,
-                Subscription.status.in_([SubscriptionStatus.ACTIVE.value, SubscriptionStatus.TRIALING.value])
+                Subscription.status.in_([SubscriptionStatus.ACTIVE.value, SubscriptionStatus.TRIALING.value]),
             )
             .order_by(Subscription.created_at.desc())
         )
-        active_sub = result.scalars().first()
-        
-        stripe_sub_id = active_sub.stripe_subscription_id if active_sub else team.stripe_subscription_id
-        if not stripe_sub_id:
-            raise HTTPException(status_code=400, detail="No active subscription found to cancel")
-        
-        await stripe.Subscription.modify_async(
-            stripe_sub_id,
-            cancel_at_period_end=True
-        )
-        
+        subscription_id = active_sub.stripe_subscription_id if active_sub else team.stripe_subscription_id
+        if not subscription_id or not subscription_id.startswith("sub_"):
+            raise HTTPException(status_code=400, detail="No active Safepay subscription found")
+        await self._request("POST", f"/client/subscriptions/v1/{subscription_id}/cancel", json={})
         if active_sub:
             active_sub.cancel_at_period_end = True
-        
-        if not team.subscription_status or team.subscription_status == SubscriptionStatus.ACTIVE.value:
-            team.subscription_status = SubscriptionStatus.CANCELED.value
-        
         await self.db.commit()
-        
-        return {"message": "Subscription will cancel at end of billing period"}
+        return {"message": "Subscription cancellation requested"}
 
     async def get_subscription_status(self, team_id: UUID):
         team = await self._get_team(team_id)
         snapshot = await plan_snapshot(self.db, team_id)
-        
-        result = await self.db.execute(
-            select(Subscription)
-            .where(Subscription.team_id == team.id)
-            .order_by(Subscription.created_at.desc())
+        latest_sub = await self.db.scalar(
+            select(Subscription).where(Subscription.team_id == team.id).order_by(Subscription.created_at.desc())
         )
-        latest_sub = result.scalars().first()
-        
-        if latest_sub:
+        if latest_sub and latest_sub.status != "pending":
             return {
                 "tier": normalize_tier(latest_sub.tier),
                 "status": latest_sub.status,
@@ -118,7 +128,6 @@ class BillingService:
                 "limits": snapshot["limits"],
                 "usage": snapshot["usage"],
             }
-        
         return {
             "tier": snapshot["tier"],
             "status": getattr(team, "subscription_status", SubscriptionStatus.ACTIVE.value),

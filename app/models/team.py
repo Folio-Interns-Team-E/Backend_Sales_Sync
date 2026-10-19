@@ -32,6 +32,7 @@ class Team(Base):
     )
     
 
+    # Legacy physical names retained for deployment compatibility; provider IDs are Safepay.
     stripe_customer_id = Column(String, nullable=True, unique=True)
     stripe_subscription_id = Column(String, nullable=True, unique=True)
     subscription_tier = Column(String, nullable=False, server_default="free")
