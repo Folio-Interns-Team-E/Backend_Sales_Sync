@@ -36,6 +36,21 @@ class BillingService:
         return amounts[tier]
 
     @staticmethod
+    def _payment_payload(*, team_id: UUID, tier: str, amount: int, reference: str) -> dict:
+        return {
+            "merchant_api_key": settings.safepay_public_key,
+            "intent": "CYBERSOURCE",
+            "mode": "payment",
+            # Flex keeps card collection inside Safepay's hosted UI. The raw entry
+            # mode is restricted to merchants with Safepay-approved PCI compliance.
+            "entry_mode": "flex",
+            "currency": "PKR",
+            "amount": amount,
+            "metadata": {"order_id": reference, "team_id": str(team_id), "tier": tier},
+            "include_fees": False,
+        }
+
+    @staticmethod
     async def _request(method: str, path: str, **kwargs) -> httpx.Response:
         if not settings.safepay_secret_key:
             raise HTTPException(status_code=503, detail="Safepay is not configured")
@@ -80,16 +95,16 @@ class BillingService:
                 detail="SAFEPAY_PUBLIC_KEY must be the Safepay client/merchant key beginning with sec_",
             )
         reference = f"salesync_{team.id.hex}_{uuid4().hex}"
-        payment_response = await self._request("POST", "/order/payments/v3/", json={
-            "merchant_api_key": settings.safepay_public_key,
-            "intent": "CYBERSOURCE",
-            "mode": "payment",
-            "entry_mode": "raw",
-            "currency": "PKR",
-            "amount": amount,
-            "metadata": {"order_id": reference, "team_id": str(team.id), "tier": tier},
-            "include_fees": False,
-        })
+        payment_response = await self._request(
+            "POST",
+            "/order/payments/v3/",
+            json=self._payment_payload(
+                team_id=team.id,
+                tier=tier,
+                amount=amount,
+                reference=reference,
+            ),
+        )
         tracker = payment_response.json().get("data", {}).get("tracker", {}).get("token")
         if not isinstance(tracker, str) or not tracker.startswith("track_"):
             raise HTTPException(status_code=502, detail="Safepay returned an invalid payment tracker")

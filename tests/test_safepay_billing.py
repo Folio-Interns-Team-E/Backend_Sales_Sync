@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -30,6 +31,22 @@ def test_safepay_protobuf_timestamp_conversion():
 def test_manual_plan_prices_are_stored_in_paisas():
     assert BillingService._amount("plus") == 3_000_000
     assert BillingService._amount("pro") == 6_000_000
+
+
+def test_hosted_checkout_uses_non_raw_card_collection(monkeypatch):
+    monkeypatch.setattr(settings, "safepay_public_key", "sec_test")
+    team_id = uuid4()
+
+    payload = BillingService._payment_payload(
+        team_id=team_id,
+        tier="plus",
+        amount=3_000_000,
+        reference="order_test",
+    )
+
+    assert payload["entry_mode"] == "flex"
+    assert payload["merchant_api_key"] == "sec_test"
+    assert payload["metadata"]["team_id"] == str(team_id)
 
 
 @pytest.mark.asyncio
