@@ -8,6 +8,14 @@ from app.ai.supervisor_agent import SupervisorAgent
 from app.services.chat_service import ChatService
 
 
+def test_chat_name_is_derived_from_first_user_message_without_ai_call():
+    assert ChatService.derive_chat_name("draft an email to Lal Majid") == "Draft an email to Lal Majid"
+    assert ChatService.derive_chat_name("https://example.com") == "New Chat"
+    assert ChatService.derive_chat_name(
+        "Create a detailed proposal for Acme covering onboarding pricing implementation and support"
+    ) == "Create a detailed proposal for Acme covering onboarding…"
+
+
 def test_email_and_icp_agents_use_supported_model():
     assert EmailAgent.MODEL == "openai/gpt-oss-120b"
     assert ICPAgent.MODEL == "openai/gpt-oss-120b"

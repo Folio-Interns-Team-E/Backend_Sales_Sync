@@ -1,4 +1,5 @@
 import logging
+import re
 import traceback
 from uuid import UUID
 from datetime import datetime
@@ -36,6 +37,8 @@ class EmailQualityError(Exception):
 
 class ChatService(ChatAgentsService):
 
+    DEFAULT_CHAT_NAMES = {"new chat", "untitled chat"}
+
     ICP_QUESTIONS = (
         "I can refine that into an ICP. Please tell me: (1) target countries or cities, "
         "(2) restaurant type and size, (3) buyer roles, (4) their problems, and "
@@ -45,6 +48,22 @@ class ChatService(ChatAgentsService):
     @staticmethod
     def _icp_confirmation(message: str) -> bool:
         return message.strip().lower() in {"yes, save it", "save it", "approve and save", "confirm and save"}
+
+    @staticmethod
+    def derive_chat_name(message: str, max_words: int = 8, max_length: int = 60) -> str:
+        """Create a stable, useful title without adding another AI call."""
+        cleaned = re.sub(r"https?://\S+", "", message)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n.,!?;:-")
+        if not cleaned:
+            return "New Chat"
+
+        words = cleaned.split()
+        title = " ".join(words[:max_words])
+        if len(title) > max_length:
+            title = title[:max_length].rsplit(" ", 1)[0] or title[:max_length]
+        if len(words) > max_words or len(cleaned) > len(title):
+            title = title.rstrip(".,!?;:-") + "…"
+        return title[0].upper() + title[1:]
 
     async def _get_team(self, team_id: UUID):
         result = await self.db.execute(select(Team).where(Team.id == team_id))
@@ -81,7 +100,38 @@ class ChatService(ChatAgentsService):
             .where(Chat.team_id == team_id)
             .order_by(desc(Chat.created_at))
         )
-        return result.scalars().all()
+        chats = result.scalars().all()
+
+        # Backfill legacy conversations that predate automatic titles. Empty
+        # conversations correctly remain named "New Chat".
+        untitled = [
+            chat for chat in chats
+            if (chat.chat_name or "").strip().casefold() in self.DEFAULT_CHAT_NAMES
+        ]
+        if untitled:
+            message_result = await self.db.execute(
+                select(ChatMessage.chat_id, ChatMessage.content)
+                .where(
+                    ChatMessage.chat_id.in_([chat.id for chat in untitled]),
+                    ChatMessage.team_id == team_id,
+                    ChatMessage.sent_by == ChatRole.USER.value,
+                )
+                .order_by(ChatMessage.created_at.asc())
+            )
+            first_messages = {}
+            for message_chat_id, content in message_result.all():
+                first_messages.setdefault(message_chat_id, content)
+
+            changed = False
+            for chat in untitled:
+                first_message = first_messages.get(chat.id)
+                if first_message:
+                    chat.chat_name = self.derive_chat_name(first_message)
+                    changed = True
+            if changed:
+                await self.db.commit()
+
+        return chats
 
     async def create_chat(self, team_id: UUID, chat_name: str = "New Chat"):
         await self._get_team(team_id)
@@ -213,6 +263,8 @@ class ChatService(ChatAgentsService):
                 metadata_log={},
             )
             self.db.add(new_chat_msg)
+            if (getattr(chat, "chat_name", "New Chat") or "").strip().casefold() in self.DEFAULT_CHAT_NAMES:
+                chat.chat_name = self.derive_chat_name(message)
             await self.db.commit()
 
             # 4. AI processing — wrapped so a fallback message is always saved
