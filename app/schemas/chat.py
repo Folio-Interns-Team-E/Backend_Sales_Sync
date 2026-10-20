@@ -43,6 +43,7 @@ class ChatUpdateRequest(BaseModel):
 
 class ChatFeedbackRequest(BaseModel):
     rating: Literal["up", "down"]
+    reason: Optional[Literal["incorrect", "incomplete", "irrelevant", "action_failed"]] = None
 
 
 class ChatNameUpdateRequest(BaseModel):

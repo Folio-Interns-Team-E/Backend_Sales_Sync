@@ -137,6 +137,7 @@ async def rate_message(
         team_ctx.team_id,
         current_user.id,
         payload.rating,
+        payload.reason,
     )
     return ApiResponse(
         success=True,

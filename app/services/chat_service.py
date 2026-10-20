@@ -335,11 +335,18 @@ class ChatService(ChatAgentsService):
         team_id: UUID,
         user_id: UUID,
         rating: str,
+        reason: str | None = None,
     ) -> str:
         if rating not in {"up", "down"}:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Rating must be up or down",
+            )
+        valid_reasons = {"incorrect", "incomplete", "irrelevant", "action_failed"}
+        if rating == "down" and reason not in valid_reasons:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="A valid reason is required for negative feedback",
             )
         message = await self.get_message(message_id, team_id)
         if message.sent_by != ChatRole.AI.value:
@@ -352,6 +359,7 @@ class ChatService(ChatAgentsService):
         feedback_by_user = dict(metadata.get("feedback_by_user") or {})
         feedback_by_user[str(user_id)] = {
             "rating": rating,
+            "reason": reason if rating == "down" else None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         metadata["feedback_by_user"] = feedback_by_user
