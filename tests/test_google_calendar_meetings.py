@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from app.services.google_calendar_service import create_calendar_meeting
 from app.services.meetings_service import MeetingService
+from app.ai.meeting_agent import MeetingAgent
 
 
 @pytest.mark.asyncio
@@ -65,3 +66,71 @@ async def test_google_calendar_conflict_blocks_event_creation():
             await create_calendar_meeting(db, uuid4(), title="Meeting", description="", meeting_date=start.date(), meeting_time=start.time().replace(tzinfo=None), timezone_name="UTC", duration_minutes=30)
     assert error.value.status_code == 409
     client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ai_meeting_request_is_prepared_without_being_executed():
+    team_id, lead_id = uuid4(), uuid4()
+    lead = SimpleNamespace(
+        id=lead_id,
+        team_id=team_id,
+        name="Ada Lovelace",
+        company_name="Analytical Engines",
+        email="ada@example.com",
+    )
+    rows = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [lead]))
+    db = SimpleNamespace(execute=AsyncMock(return_value=rows))
+    agent = MeetingAgent(db)
+    agent._compile_meeting_decision = AsyncMock(return_value={
+        "decision": "CREATE",
+        "matched_lead_id": str(lead_id),
+        "start_time": "2026-10-21T14:00:00",
+        "timezone": "Asia/Karachi",
+        "target_cancel_time": None,
+        "clarification_message": None,
+    })
+    agent._execute_create = AsyncMock()
+
+    pending, message = await agent.prepare(
+        "Schedule Ada tomorrow at 2 PM",
+        team_id,
+    )
+
+    assert pending == {
+        "type": "meeting",
+        "decision": "CREATE",
+        "lead_id": str(lead_id),
+        "start_time": "2026-10-21T14:00:00",
+        "timezone": "Asia/Karachi",
+        "target_cancel_time": None,
+    }
+    assert "Please confirm" in message
+    assert "Ada Lovelace" in message
+    agent._execute_create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_meeting_revalidates_workspace_before_execution():
+    team_id, user_id, lead_id = uuid4(), uuid4(), uuid4()
+    lead = SimpleNamespace(id=lead_id, team_id=team_id, name="Ada Lovelace")
+    result = SimpleNamespace(scalar_one_or_none=lambda: lead)
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    agent = MeetingAgent(db)
+    agent._execute_create = AsyncMock(return_value="scheduled")
+    pending = {
+        "type": "meeting",
+        "decision": "CREATE",
+        "lead_id": str(lead_id),
+        "start_time": "2026-10-21T14:00:00",
+        "timezone": "Asia/Karachi",
+    }
+
+    response = await agent.execute_prepared(pending, team_id, user_id)
+
+    assert response == "scheduled"
+    agent._execute_create.assert_awaited_once_with(
+        lead,
+        "2026-10-21T14:00:00",
+        user_id,
+        "Asia/Karachi",
+    )

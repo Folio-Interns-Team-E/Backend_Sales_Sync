@@ -51,6 +51,14 @@ class ChatService(ChatAgentsService):
         return message.strip().lower() in {"yes, save it", "save it", "approve and save", "confirm and save"}
 
     @staticmethod
+    def _action_confirmation(message: str) -> bool:
+        return message.strip().lower() in {"confirm", "yes, confirm", "proceed", "yes, proceed"}
+
+    @staticmethod
+    def _action_cancellation(message: str) -> bool:
+        return message.strip().lower() in {"cancel", "no", "stop", "do not proceed", "don't proceed"}
+
+    @staticmethod
     def derive_chat_name(message: str, max_words: int = 8, max_length: int = 60) -> str:
         """Create a stable, useful title without adding another AI call."""
         cleaned = re.sub(r"https?://\S+", "", message)
@@ -244,6 +252,9 @@ class ChatService(ChatAgentsService):
             db_history = history_res.scalars().all()
             last_assistant = db_history[0] if db_history and db_history[0].sent_by == ChatRole.AI.value else None
             icp_flow = (last_assistant.metadata_log or {}).get("icp_flow") if last_assistant else None
+            pending_action = (last_assistant.metadata_log or {}).get("pending_action") if last_assistant else None
+            if not isinstance(pending_action, dict):
+                pending_action = None
 
             messages_history = [
                 {
@@ -273,7 +284,10 @@ class ChatService(ChatAgentsService):
             try:
                 ai_response = (
                     {"action": "ICP_FOLLOWUP", "parameters": {}}
-                    if icp_flow else await supervisor.extract_action(message, icp)
+                    if icp_flow
+                    else {"action": "CONFIRM_PENDING", "parameters": {}}
+                    if pending_action
+                    else await supervisor.extract_action(message, icp)
                 )
                 action = ai_response.get("action", "NORMAL")
                 params = ai_response.get("parameters", {})
@@ -282,7 +296,22 @@ class ChatService(ChatAgentsService):
                 print(ai_response)
                 print("==================AI ACTION==================")
 
-                if action == "UPDATE_ICP":
+                if action == "CONFIRM_PENDING":
+                    if self._action_cancellation(message):
+                        response = "Okay, I cancelled that action. Nothing was changed."
+                    elif not self._action_confirmation(message):
+                        response = "Please reply **confirm** to perform the pending action or **cancel** to stop it."
+                        response_metadata = {"pending_action": pending_action}
+                    elif pending_action.get("type") == "meeting":
+                        response = await MeetingAgent(db_session=self.db).execute_prepared(
+                            pending_action,
+                            team.id,
+                            user_id,
+                        )
+                    else:
+                        response = "That pending action is no longer supported. Please start the request again."
+
+                elif action == "UPDATE_ICP":
                     response = self.ICP_QUESTIONS
                     response_metadata = {"icp_flow": {"phase": "details", "request": message[:2000]}}
 
@@ -530,12 +559,9 @@ class ChatService(ChatAgentsService):
 
                 elif action == "MEETING_OPERATION":
                     meeting_agent = MeetingAgent(db_session=self.db)
-
-                    response = await meeting_agent.run(
-                        user_prompt=message,
-                        team_id=team.id,
-                        user_id=user_id,
-                    )
+                    prepared_action, response = await meeting_agent.prepare(message, team.id)
+                    if prepared_action:
+                        response_metadata = {"pending_action": prepared_action}
 
 
 
@@ -667,7 +693,7 @@ class ChatService(ChatAgentsService):
                         response = "I can help you search for prospects, analyze individuals, modify your ICP, or answer questions from your knowledge base. What would you like to do?"
 
 
-                if action in {"UPDATE_ICP", "ICP_FOLLOWUP", "MEETING_OPERATION", "GENERATE_PROPOSAL"}:
+                if action in {"UPDATE_ICP", "ICP_FOLLOWUP", "CONFIRM_PENDING", "MEETING_OPERATION", "GENERATE_PROPOSAL"}:
                     final_response = response
                 else:
                     final_response = await supervisor.run(

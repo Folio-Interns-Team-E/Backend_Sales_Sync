@@ -31,6 +31,102 @@ class MeetingAgent:
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
 
+    async def prepare(self, user_prompt: str, team_id: UUID) -> tuple[dict | None, str]:
+        """Parse a meeting request without changing Calendar or the database."""
+        leads_query = select(Lead).where(Lead.team_id == team_id)
+        res = await self.db.execute(leads_query)
+        leads = res.scalars().all()
+        leads_context = [
+            {
+                "id": str(lead.id),
+                "name": lead.name,
+                "company_name": lead.company_name,
+                "email": lead.email,
+            }
+            for lead in leads
+        ]
+
+        try:
+            parsed = await self._compile_meeting_decision(user_prompt, leads_context)
+        except Exception:
+            logger.exception("MeetingAgent structured parsing failed")
+            return None, "I couldn't interpret that meeting request. Please specify the prospect, action, date, time, and timezone."
+
+        if parsed.get("decision") == "NEED_CLARIFICATION":
+            return None, parsed.get("clarification_message") or "Which prospect, date, time, and timezone should I use?"
+
+        lead_id = parsed.get("matched_lead_id")
+        try:
+            lead_uuid = UUID(str(lead_id))
+        except (TypeError, ValueError):
+            return None, "I couldn't match that request to a prospect in this workspace. Which prospect do you mean?"
+
+        lead = next((item for item in leads if item.id == lead_uuid), None)
+        if not lead:
+            return None, "I couldn't match that request to a prospect in this workspace. Which prospect do you mean?"
+
+        decision = parsed.get("decision")
+        pending = {
+            "type": "meeting",
+            "decision": decision,
+            "lead_id": str(lead.id),
+            "start_time": parsed.get("start_time"),
+            "timezone": parsed.get("timezone") or "Asia/Karachi",
+            "target_cancel_time": parsed.get("target_cancel_time"),
+        }
+
+        if decision == "CREATE":
+            start_time = pending["start_time"]
+            if not start_time:
+                return None, "What date and time should I schedule the meeting for?"
+            try:
+                formatted = datetime.fromisoformat(str(start_time)).strftime("%A, %d %B %Y at %I:%M %p")
+            except ValueError:
+                return None, "I couldn't understand the meeting date and time. Please provide them again."
+            return pending, (
+                f"Please confirm: schedule a 30-minute meeting with {lead.name} on {formatted} "
+                f"({pending['timezone']}) and create a Google Meet link? Reply **confirm** to proceed or **cancel** to stop."
+            )
+
+        if decision == "CANCEL":
+            when = ""
+            if pending["target_cancel_time"]:
+                try:
+                    when = " on " + datetime.fromisoformat(str(pending["target_cancel_time"])).strftime("%A, %d %B %Y at %I:%M %p")
+                except ValueError:
+                    return None, "I couldn't understand which meeting time to cancel. Please provide it again."
+            return pending, (
+                f"Please confirm: cancel the scheduled meeting with {lead.name}{when}? "
+                "Reply **confirm** to proceed or **cancel** to keep it."
+            )
+
+        return None, "Should I schedule or cancel a meeting, and for which prospect?"
+
+    async def execute_prepared(self, pending: dict, team_id: UUID, user_id: UUID) -> str:
+        """Execute a previously prepared action after re-validating tenant ownership."""
+        try:
+            lead_id = UUID(str(pending.get("lead_id")))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("The pending meeting action is invalid") from exc
+
+        result = await self.db.execute(
+            select(Lead).where(Lead.id == lead_id, Lead.team_id == team_id)
+        )
+        lead = result.scalar_one_or_none()
+        if not lead:
+            raise ValueError("The prospect is no longer available in this workspace")
+
+        if pending.get("decision") == "CREATE":
+            return await self._execute_create(
+                lead,
+                pending.get("start_time"),
+                user_id,
+                pending.get("timezone") or "Asia/Karachi",
+            )
+        if pending.get("decision") == "CANCEL":
+            return await self._execute_cancel(lead, pending.get("target_cancel_time"))
+        raise ValueError("The pending meeting action is unsupported")
+
     async def run(self, user_prompt: str, team_id: UUID, user_id: UUID) -> str:
         """
         Primary entry point for resolving and executing calendar-related intents.
