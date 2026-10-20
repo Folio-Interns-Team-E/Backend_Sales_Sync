@@ -112,3 +112,43 @@ async def test_meeting_chat_waits_for_explicit_confirmation_before_execution():
             team_id,
             user_id,
         )
+
+
+@pytest.mark.asyncio
+async def test_intent_failure_is_saved_as_retryable_instead_of_crashing_handler():
+    user_id, team_id, chat_id = uuid4(), uuid4(), uuid4()
+    team = SimpleNamespace(id=team_id, icp="Existing ICP")
+    saved_messages = []
+    db = SimpleNamespace(commit=AsyncMock(), refresh=AsyncMock(), rollback=AsyncMock())
+    db.add = saved_messages.append
+
+    async def execute(_statement):
+        if execute.calls == 0:
+            result = SimpleNamespace(
+                scalar_one_or_none=lambda: SimpleNamespace(
+                    full_name="User",
+                    email="user@example.com",
+                )
+            )
+        else:
+            result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+        execute.calls += 1
+        return result
+
+    execute.calls = 0
+    db.execute = execute
+    service = ChatService(db)
+    service._get_team = AsyncMock(return_value=team)
+    service._get_chat = AsyncMock(return_value=SimpleNamespace(id=chat_id, chat_name="Existing"))
+
+    with patch("app.services.chat_service.SupervisorAgent") as supervisor:
+        supervisor.return_value.extract_action = AsyncMock(side_effect=RuntimeError("model unavailable"))
+        response = await service.send_message(user_id, team_id, chat_id, "Draft an email")
+
+    assert "encountered an error" in response
+    assert saved_messages[-1].metadata_log == {
+        "assistant_error": {
+            "code": "assistant_processing_failed",
+            "retryable": True,
+        }
+    }

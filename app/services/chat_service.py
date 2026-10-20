@@ -391,6 +391,7 @@ class ChatService(ChatAgentsService):
 
             # 4. AI processing — wrapped so a fallback message is always saved
             response_metadata = {}
+            action = "NORMAL"
             try:
                 ai_response = (
                     {"action": "ICP_FOLLOWUP", "parameters": {}}
@@ -862,18 +863,38 @@ class ChatService(ChatAgentsService):
                     await self.db.rollback()
                 except Exception:
                     pass
-                if isinstance(ai_err, (EmailQualityError, LeadClarificationError)):
+                if isinstance(ai_err, LeadClarificationError):
                     final_response = str(ai_err)
+                elif isinstance(ai_err, EmailQualityError):
+                    final_response = str(ai_err)
+                    response_metadata = {
+                        "assistant_error": {
+                            "code": "draft_quality_failed",
+                            "retryable": True,
+                        }
+                    }
                 elif action == "GENERATE_PROPOSAL" and isinstance(ai_err, RuntimeError):
                     final_response = (
                         "I couldn't generate the proposal because a required service failed: "
                         f"{ai_err}. Please try again shortly."
                     )
+                    response_metadata = {
+                        "assistant_error": {
+                            "code": "proposal_service_failed",
+                            "retryable": True,
+                        }
+                    }
                 else:
                     final_response = (
                         "I encountered an error while processing your request. "
                         "Please try again or rephrase your question."
                     )
+                    response_metadata = {
+                        "assistant_error": {
+                            "code": "assistant_processing_failed",
+                            "retryable": True,
+                        }
+                    }
 
             ai_msg = ChatMessage(
                 chat_id=chat_uuid,
