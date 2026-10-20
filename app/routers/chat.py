@@ -12,6 +12,7 @@ from app.schemas.chat import (
     ChatSendResponse,
     ChatMessageResponse,
     ChatUpdateRequest,
+    ChatFeedbackRequest,
 )
 from app.schemas.common import ApiResponse
 from app.services.chat_service import ChatService
@@ -120,6 +121,28 @@ async def update_message(
     service = ChatService(db)
     message = await service.update_message(message_id, team_ctx.team_id, payload.content)
     return ApiResponse(success=True, message="Message updated", data=message)
+
+
+@router.put("/messages/{message_id}/feedback", response_model=ApiResponse[dict])
+async def rate_message(
+    message_id: UUID,
+    payload: ChatFeedbackRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    team_ctx: TeamContext = Depends(get_team_context),
+):
+    service = ChatService(db)
+    rating = await service.rate_message(
+        message_id,
+        team_ctx.team_id,
+        current_user.id,
+        payload.rating,
+    )
+    return ApiResponse(
+        success=True,
+        message="Feedback saved",
+        data={"message_id": str(message_id), "rating": rating},
+    )
 
 
 @router.delete("/messages/{message_id}", response_model=ApiResponse[dict])

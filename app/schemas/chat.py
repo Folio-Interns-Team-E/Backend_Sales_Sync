@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 from datetime import datetime
 
@@ -39,6 +39,10 @@ class ChatSendResponse(BaseModel):
 
 class ChatUpdateRequest(BaseModel):
     content: str
+
+
+class ChatFeedbackRequest(BaseModel):
+    rating: Literal["up", "down"]
 
 
 class ChatNameUpdateRequest(BaseModel):

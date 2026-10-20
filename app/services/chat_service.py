@@ -2,7 +2,7 @@ import logging
 import re
 import traceback
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -328,6 +328,37 @@ class ChatService(ChatAgentsService):
         message = await self.get_message(message_id, team_id)
         await self.db.delete(message)
         await self.db.commit()
+
+    async def rate_message(
+        self,
+        message_id: UUID,
+        team_id: UUID,
+        user_id: UUID,
+        rating: str,
+    ) -> str:
+        if rating not in {"up", "down"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Rating must be up or down",
+            )
+        message = await self.get_message(message_id, team_id)
+        if message.sent_by != ChatRole.AI.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only assistant messages can be rated",
+            )
+
+        metadata = dict(message.metadata_log or {})
+        feedback_by_user = dict(metadata.get("feedback_by_user") or {})
+        feedback_by_user[str(user_id)] = {
+            "rating": rating,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        metadata["feedback_by_user"] = feedback_by_user
+        message.metadata_log = metadata
+        await self.db.commit()
+        await self.db.refresh(message)
+        return rating
 
     # =====================================================
     # MAIN CHAT ROUTER
