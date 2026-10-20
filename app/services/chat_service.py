@@ -829,6 +829,17 @@ class ChatService(ChatAgentsService):
 
                     if kb_answer.get("sources"):
                         response = kb_answer["answer"]
+                        response_metadata = {
+                            "knowledge_sources": [
+                                {
+                                    "asset_id": str(source["asset_id"]),
+                                    "title": source["asset_title"],
+                                    "chunk_index": source["chunk_index"],
+                                    "score": round(float(source["score"]), 4),
+                                }
+                                for source in kb_answer["sources"][:5]
+                            ]
+                        }
                     else:
                         response = "I can help you search for prospects, analyze individuals, modify your ICP, or answer questions from your knowledge base. What would you like to do?"
 
