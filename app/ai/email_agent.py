@@ -117,6 +117,10 @@ class EmailAgent:
             {json.dumps(lead_info, indent=2)}
             \"\"\"
 
+            Use the sales_context timeline to avoid repeating prior outreach, acknowledge
+            relevant completed meetings or proposals, and choose the appropriate next step.
+            Never claim that an event occurred unless it appears in this supplied context.
+
             Strict Writing Rules:
             1. Brevity is King: Keep the entire email under 100 words. Cut all fluff.
             2. Format: The email must consist of exactly 3 single-sentence paragraphs. 

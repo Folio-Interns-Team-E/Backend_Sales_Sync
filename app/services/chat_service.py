@@ -13,6 +13,7 @@ from app.models.proposal import Proposal, ProposalTemplate
 from sqlalchemy import desc
 from app.models.lead import Lead, LeadStatus
 from app.models.meeting import Meeting, MeetingStatus
+from app.models.email import Email
 from app.services.chat_agents import ChatAgentsService
 from app.ai.meeting_agent import MeetingAgent
 from app.ai.proposal_evaluator import ProposalEvaluatorAgent
@@ -99,6 +100,64 @@ class ChatService(ChatAgentsService):
     async def _get_icp_context(self, team_id: UUID):
         team = await self._get_team(team_id)
         return team.icp if team.icp else "No ICP available"
+
+    async def _build_lead_sales_context(self, team_id: UUID, lead_id: UUID) -> dict:
+        """Return a small tenant-scoped timeline for grounded AI writing."""
+        email_result = await self.db.execute(
+            select(Email)
+            .join(Lead, Email.lead_id == Lead.id)
+            .where(Email.lead_id == lead_id, Lead.team_id == team_id)
+            .order_by(desc(Email.sent_at))
+            .limit(5)
+        )
+        meeting_result = await self.db.execute(
+            select(Meeting)
+            .join(Lead, Meeting.lead_id == Lead.id)
+            .where(Meeting.lead_id == lead_id, Lead.team_id == team_id)
+            .order_by(desc(Meeting.date), desc(Meeting.time))
+            .limit(5)
+        )
+        proposal_result = await self.db.execute(
+            select(Proposal)
+            .where(Proposal.lead_id == lead_id, Proposal.team_id == team_id)
+            .order_by(desc(Proposal.created_at))
+            .limit(5)
+        )
+
+        emails = email_result.scalars().all()
+        meetings = meeting_result.scalars().all()
+        proposals = proposal_result.scalars().all()
+        return {
+            "recent_outreach": [
+                {
+                    "status": getattr(email.status, "value", str(email.status)),
+                    "subject": email.subject[:200],
+                    "body": email.body[:800],
+                    "sent_at": email.sent_at.isoformat() if email.sent_at else None,
+                }
+                for email in emails
+            ],
+            "meetings": [
+                {
+                    "date": meeting.date.isoformat(),
+                    "time": meeting.time.isoformat(),
+                    "timezone": meeting.timezone,
+                    "status": meeting.status,
+                    "agenda": (meeting.agenda or "")[:500],
+                    "notes": (meeting.notes or "")[:500],
+                }
+                for meeting in meetings
+            ],
+            "proposals": [
+                {
+                    "status": proposal.status,
+                    "outcome": proposal.outcome,
+                    "title": str((proposal.ai_metadata or {}).get("document_title") or "Proposal")[:200],
+                    "created_at": proposal.created_at.isoformat() if proposal.created_at else None,
+                }
+                for proposal in proposals
+            ],
+        }
 
     # =====================================================
     # CHAT CRUD
@@ -507,7 +566,11 @@ class ChatService(ChatAgentsService):
                             "title": existing_lead.job_title,
                             "company": existing_lead.company_name,
                             "email": existing_lead.email,
-                            "raw_data": (existing_lead.ai_context_data or {}).get("raw_pool_data", {})
+                            "raw_data": (existing_lead.ai_context_data or {}).get("raw_pool_data", {}),
+                            "sales_context": await self._build_lead_sales_context(
+                                team.id,
+                                existing_lead.id,
+                            ),
                         }
 
                         email_agent = EmailAgent()
