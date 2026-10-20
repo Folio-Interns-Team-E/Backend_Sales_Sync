@@ -26,6 +26,15 @@ async def admin_overview(
     return ApiResponse(success=True, message="Admin overview fetched", data=data)
 
 
+@router.get("/ai-feedback", response_model=ApiResponse[dict])
+async def ai_feedback_summary(
+    db: AsyncSession = Depends(get_db),
+    team_ctx: TeamContext = Depends(require_role(MemberRole.admin, MemberRole.manager)),
+):
+    data = await AdminDashboardService(db).ai_feedback(team_ctx.team_id)
+    return ApiResponse(success=True, message="AI feedback summary fetched", data=data)
+
+
 @router.get("/exports/{resource}.csv")
 async def export_workspace_csv(
     resource: Literal["leads", "contacts", "opportunities", "audit"],

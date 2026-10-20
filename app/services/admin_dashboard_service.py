@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.chat import ChatMessage, ChatRole
 from app.models.email import Email, EmailStatus
 from app.models.google_calendar_credentials import GoogleCalendarCredentials
 from app.models.google_credentials import GoogleCredentials
@@ -17,12 +18,63 @@ from app.models.team_member import TeamMember
 from app.services.lead_provider_service import reset_usage_if_needed
 
 
+def aggregate_ai_feedback(messages) -> dict:
+    reasons = {"incorrect": 0, "incomplete": 0, "irrelevant": 0, "action_failed": 0}
+    helpful = 0
+    unhelpful = 0
+    recent_negative = []
+
+    for message in messages:
+        feedback = (message.metadata_log or {}).get("feedback_by_user", {})
+        if not isinstance(feedback, dict):
+            continue
+        for entry in feedback.values():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("rating") == "up":
+                helpful += 1
+                continue
+            if entry.get("rating") != "down":
+                continue
+            unhelpful += 1
+            reason = entry.get("reason")
+            if reason in reasons:
+                reasons[reason] += 1
+            if len(recent_negative) < 10:
+                recent_negative.append({
+                    "message_id": str(message.id),
+                    "chat_id": str(message.chat_id),
+                    "response": message.content[:240],
+                    "reason": reason,
+                    "updated_at": entry.get("updated_at") or message.created_at.isoformat(),
+                })
+
+    total = helpful + unhelpful
+    return {
+        "total_ratings": total,
+        "helpful": helpful,
+        "unhelpful": unhelpful,
+        "helpful_rate": round((helpful / total) * 100, 1) if total else 0.0,
+        "reasons": reasons,
+        "recent_negative": recent_negative,
+    }
+
+
 class AdminDashboardService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
     async def _count(self, statement) -> int:
         return int((await self.db.execute(statement)).scalar_one() or 0)
+
+    async def ai_feedback(self, team_id: UUID) -> dict:
+        messages = (await self.db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.team_id == team_id, ChatMessage.sent_by == ChatRole.AI.value)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(500)
+        )).scalars().all()
+        return aggregate_ai_feedback(messages)
 
     async def overview(self, team_id: UUID) -> dict:
         team = (await self.db.execute(select(Team).where(Team.id == team_id))).scalar_one()
