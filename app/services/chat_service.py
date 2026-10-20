@@ -442,6 +442,20 @@ class ChatService(ChatAgentsService):
                 action = ai_response.get("action", "NORMAL")
                 params = ai_response.get("parameters", {})
 
+                confirmed_proposal = False
+                if (
+                    action == "CONFIRM_PENDING"
+                    and pending_action
+                    and pending_action.get("type") == "proposal"
+                    and self._action_confirmation(message)
+                ):
+                    action = "GENERATE_PROPOSAL"
+                    params = pending_action.get("parameters") or {}
+                    message = str(pending_action.get("request") or "")[:6000]
+                    confirmed_proposal = True
+                elif action == "GENERATE_PROPOSAL":
+                    action = "PREPARE_PROPOSAL"
+
                 print("==================AI ACTION==================")
                 print(ai_response)
                 print("==================AI ACTION==================")
@@ -728,9 +742,24 @@ class ChatService(ChatAgentsService):
                     if prepared_action:
                         response_metadata = {"pending_action": prepared_action}
 
+                elif action == "PREPARE_PROPOSAL":
+                    name_keywords = params.get("keywords", [])
+                    target = ", ".join(str(keyword) for keyword in name_keywords[:3])
+                    target_text = f" for {target}" if target else ""
+                    response = (
+                        f"Please confirm: generate and save a proposal{target_text} using your "
+                        "current ICP, knowledge base, and proposal template? This will count toward "
+                        "your monthly proposal allowance. Reply **confirm** to proceed or **cancel** to stop."
+                    )
+                    response_metadata = {
+                        "pending_action": {
+                            "type": "proposal",
+                            "request": message[:6000],
+                            "parameters": params,
+                        }
+                    }
 
-
-                elif action == "GENERATE_PROPOSAL":
+                elif action == "GENERATE_PROPOSAL" and confirmed_proposal:
                     from app.core.s3 import upload_to_s3
                     from app.models.proposal import Proposal, ProposalStatus, ProposalOutcome
                     from app.ai.proposal_agent import ProposalAgent
@@ -884,7 +913,7 @@ class ChatService(ChatAgentsService):
                         response = "I can help you search for prospects, analyze individuals, modify your ICP, or answer questions from your knowledge base. What would you like to do?"
 
 
-                if action in {"UPDATE_ICP", "ICP_FOLLOWUP", "CONFIRM_PENDING", "MEETING_OPERATION", "GENERATE_PROPOSAL"}:
+                if action in {"UPDATE_ICP", "ICP_FOLLOWUP", "CONFIRM_PENDING", "MEETING_OPERATION", "PREPARE_PROPOSAL", "GENERATE_PROPOSAL"}:
                     final_response = response
                 else:
                     final_response = await supervisor.run(
