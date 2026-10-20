@@ -513,6 +513,16 @@ class ChatService(ChatAgentsService):
                             body=body
                         )
 
+                        # Let clients open the exact draft created by the assistant. Without
+                        # this metadata Email Studio can only refresh whichever lead happened
+                        # to be selected before the chat action.
+                        response_metadata = {
+                            "draft_email": {
+                                "email_id": str(drafted_record.id),
+                                "lead_id": str(existing_lead.id),
+                            }
+                        }
+
                         response = (
                             f"Draft Created for {existing_lead.name}\n"
                             f"I have successfully generated a personalized outreach template and saved it as a draft in your pipeline system.\n\n"
