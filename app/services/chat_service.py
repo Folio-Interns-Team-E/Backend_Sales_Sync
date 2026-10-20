@@ -37,6 +37,10 @@ class EmailQualityError(Exception):
     """Safe, user-facing failure raised when an AI draft misses quality gates."""
 
 
+class LeadClarificationError(Exception):
+    """Safe failure used when an action could target the wrong prospect."""
+
+
 class ChatService(ChatAgentsService):
 
     DEFAULT_CHAT_NAMES = {"new chat", "untitled chat"}
@@ -58,6 +62,53 @@ class ChatService(ChatAgentsService):
     @staticmethod
     def _action_cancellation(message: str) -> bool:
         return message.strip().lower() in {"cancel", "no", "stop", "do not proceed", "don't proceed"}
+
+    @staticmethod
+    def _resolve_lead_candidate(candidates: list, keywords: list, message: str):
+        """Resolve one lead deterministically, never by arbitrary database order."""
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        normalize = lambda value: re.sub(r"\s+", " ", str(value or "").strip().casefold())
+        requested = {normalize(value) for value in keywords if normalize(value)}
+        combined_request = normalize(" ".join(str(value) for value in keywords))
+        if combined_request:
+            requested.add(combined_request)
+        exact = [lead for lead in candidates if normalize(lead.name) in requested]
+        if len(exact) == 1:
+            return exact[0]
+        if exact:
+            candidates = exact
+
+        normalized_message = normalize(message)
+        scored = []
+        for lead in candidates:
+            discriminators = (lead.name, lead.email, lead.company_name, lead.job_title)
+            score = sum(
+                1
+                for value in discriminators
+                if normalize(value) and normalize(value) in normalized_message
+            )
+            scored.append((score, lead))
+        best_score = max(score for score, _lead in scored)
+        winners = [lead for score, lead in scored if score == best_score and score > 0]
+        return winners[0] if len(winners) == 1 else None
+
+    @staticmethod
+    def _lead_clarification_message(candidates: list, action_label: str) -> str:
+        options = []
+        for lead in candidates[:5]:
+            details = " · ".join(
+                value for value in (lead.company_name, lead.job_title, lead.email) if value
+            )
+            options.append(f"- {lead.name}" + (f" — {details}" if details else ""))
+        return (
+            f"I found multiple matching prospects and won't guess which one to {action_label}. "
+            "Please repeat the request with the full name and company or email:\n\n"
+            + "\n".join(options)
+        )
 
     @staticmethod
     def derive_chat_name(message: str, max_words: int = 8, max_length: int = 60) -> str:
@@ -553,13 +604,21 @@ class ChatService(ChatAgentsService):
                     from app.services.emails_service import EmailService
 
                     name_keywords = params.get("keywords", [])
-                    current_leads = await self.search_current_leads_by_name(team.id, name_keywords, limit=1)
+                    current_leads = await self.search_current_leads_by_name(team.id, name_keywords, limit=10)
 
                     if not current_leads:
                         target_name = name_keywords[0] if name_keywords else "the requested prospect"
                         response = f"Could not find any lead named '{target_name}' in your current workspace pipeline to draft an email for."
                     else:
-                        existing_lead = current_leads[0]
+                        existing_lead = self._resolve_lead_candidate(
+                            current_leads,
+                            name_keywords,
+                            message,
+                        )
+                        if not existing_lead:
+                            raise LeadClarificationError(
+                                self._lead_clarification_message(current_leads, "draft an email for")
+                            )
 
                         profile_payload = {
                             "name": existing_lead.name,
@@ -640,10 +699,19 @@ class ChatService(ChatAgentsService):
                     lead_id = None
                     if name_keywords:
                         current_leads = await self.search_current_leads_by_name(
-                            team.id, name_keywords, limit=1
+                            team.id, name_keywords, limit=10
                         )
                         if current_leads:
-                            lead_id = current_leads[0].id
+                            matched_lead = self._resolve_lead_candidate(
+                                current_leads,
+                                name_keywords,
+                                message,
+                            )
+                            if not matched_lead:
+                                raise LeadClarificationError(
+                                    self._lead_clarification_message(current_leads, "generate a proposal for")
+                                )
+                            lead_id = matched_lead.id
 
                     template_query = (
                         select(ProposalTemplate)
@@ -774,7 +842,7 @@ class ChatService(ChatAgentsService):
                     await self.db.rollback()
                 except Exception:
                     pass
-                if isinstance(ai_err, EmailQualityError):
+                if isinstance(ai_err, (EmailQualityError, LeadClarificationError)):
                     final_response = str(ai_err)
                 elif action == "GENERATE_PROPOSAL" and isinstance(ai_err, RuntimeError):
                     final_response = (
