@@ -413,11 +413,14 @@ class ChatService(ChatAgentsService):
                         response = "Please reply **confirm** to perform the pending action or **cancel** to stop it."
                         response_metadata = {"pending_action": pending_action}
                     elif pending_action.get("type") == "meeting":
-                        response = await MeetingAgent(db_session=self.db).execute_prepared(
+                        meeting_agent = MeetingAgent(db_session=self.db)
+                        response = await meeting_agent.execute_prepared(
                             pending_action,
                             team.id,
                             user_id,
                         )
+                        if meeting_agent.action_result:
+                            response_metadata = {"action_result": meeting_agent.action_result}
                     else:
                         response = "That pending action is no longer supported. Please start the request again."
 
@@ -814,6 +817,12 @@ class ChatService(ChatAgentsService):
                         "You can review and download it from the Proposals tab. "
                         f"Quality check: {badge} ({evaluation_report.get('overall_score')}/10)."
                     )
+                    response_metadata = {
+                        "action_result": {
+                            "type": "proposal_created",
+                            "proposal_id": str(proposal.id),
+                        }
+                    }
                 else:
                     rag_service = KnowledgeBaseRAGService(self.db)
                     kb_answer = await rag_service.answer_query(team.id, message)

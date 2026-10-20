@@ -134,3 +134,38 @@ async def test_confirmed_meeting_revalidates_workspace_before_execution():
         user_id,
         "Asia/Karachi",
     )
+
+
+@pytest.mark.asyncio
+async def test_created_meeting_exposes_structured_chat_action():
+    team_id, user_id, lead_id, meeting_id = uuid4(), uuid4(), uuid4(), uuid4()
+    lead = SimpleNamespace(
+        id=lead_id,
+        team_id=team_id,
+        name="Ada Lovelace",
+        email="ada@example.com",
+    )
+    meeting = SimpleNamespace(
+        id=meeting_id,
+        meet_url="https://meet.google.com/abc-defg-hij",
+    )
+    db = SimpleNamespace()
+    agent = MeetingAgent(db)
+
+    with patch(
+        "app.ai.meeting_agent.MeetingService.create_meeting",
+        new=AsyncMock(return_value=meeting),
+    ):
+        response = await agent._execute_create(
+            lead,
+            "2026-10-21T14:00:00",
+            user_id,
+            "Asia/Karachi",
+        )
+
+    assert "Meeting Scheduled Successfully" in response
+    assert agent.action_result == {
+        "type": "meeting_created",
+        "meeting_id": str(meeting_id),
+        "meet_url": "https://meet.google.com/abc-defg-hij",
+    }

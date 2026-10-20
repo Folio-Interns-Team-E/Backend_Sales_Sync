@@ -30,6 +30,7 @@ class MeetingAgent:
 
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
+        self.action_result: dict | None = None
 
     async def prepare(self, user_prompt: str, team_id: UUID) -> tuple[dict | None, str]:
         """Parse a meeting request without changing Calendar or the database."""
@@ -262,6 +263,11 @@ class MeetingAgent:
                 lead.team_id, user_id, lead.id, start_time_dt.date(), start_time_dt.time(),
                 timezone_name, 30, f"Sales conversation with {lead.name}",
             )
+            self.action_result = {
+                "type": "meeting_created",
+                "meeting_id": str(meeting.id),
+                "meet_url": meeting.meet_url,
+            }
 
             return (
                 f"Meeting Scheduled Successfully!\n"
@@ -336,6 +342,10 @@ class MeetingAgent:
                 await delete_calendar_meeting(self.db, active_meeting.created_by, active_meeting.calendar_event_id)
                 active_meeting.status = MeetingStatus.CANCELLED.value
                 await self.db.commit()
+                self.action_result = {
+                    "type": "meeting_cancelled",
+                    "meeting_id": str(active_meeting.id),
+                }
             else:
                 return "This legacy meeting was booked outside Google Calendar. Cancel it with the original provider; SaleSync cannot cancel it remotely."
 
