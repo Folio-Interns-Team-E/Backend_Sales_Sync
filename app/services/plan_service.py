@@ -32,7 +32,7 @@ class PlanLimits:
 
 
 PLAN_LIMITS = {
-    "free": PlanLimits(1, 100, 25, 50, 1, 3),
+    "free": PlanLimits(3, 100, 25, 50, 1, 3),
     "plus": PlanLimits(5, 5_000, 1_000, 2_000, 20, 100),
     "pro": PlanLimits(15, 25_000, 5_000, 10_000, 100, 500),
 }

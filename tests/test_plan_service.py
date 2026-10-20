@@ -3,7 +3,7 @@ from app.services.plan_service import PLAN_LIMITS, normalize_tier
 
 def test_launch_plan_limits_are_centralized():
     assert set(PLAN_LIMITS) == {"free", "plus", "pro"}
-    assert PLAN_LIMITS["free"].members == 1
+    assert PLAN_LIMITS["free"].members == 3
     assert PLAN_LIMITS["plus"].leads == 5_000
     assert PLAN_LIMITS["pro"].emails_monthly == 10_000
 
