@@ -65,6 +65,7 @@ class OpportunityResponse(BaseModel):
     currency: str
     probability: int
     expected_close_date: Optional[date]
+    closed_at: Optional[datetime]
     loss_reason: Optional[str]
     notes: Optional[str]
     created_at: datetime

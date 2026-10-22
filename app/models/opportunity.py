@@ -32,6 +32,7 @@ class Opportunity(Base):
     currency = Column(String(3), nullable=False, default="USD")
     probability = Column(Integer, nullable=False, default=10)
     expected_close_date = Column(Date, nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True, index=True)
     loss_reason = Column(String(500), nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

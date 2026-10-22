@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -63,6 +64,8 @@ class OpportunityService:
         data = payload.model_dump()
         data["stage"] = payload.stage.value
         data["owner_id"] = owner_id
+        if payload.stage in {OpportunityStage.CLOSED_WON, OpportunityStage.CLOSED_LOST}:
+            data["closed_at"] = datetime.now(timezone.utc)
         opportunity = Opportunity(team_id=team_id, **data)
         self.db.add(opportunity)
         await self.db.commit()
@@ -74,15 +77,21 @@ class OpportunityService:
         if role == MemberRole.rep and changes.get("owner_id", user_id) != user_id:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Sales reps cannot reassign opportunities")
         await self._validate_relations(team_id, changes.get("lead_id"), changes.get("owner_id"))
+        previous_stage = opportunity.stage
         if "stage" in changes and changes["stage"] is not None:
             changes["stage"] = changes["stage"].value
         if changes.get("stage") == OpportunityStage.CLOSED_WON.value:
             changes["probability"] = 100
             changes["loss_reason"] = None
+            if previous_stage != OpportunityStage.CLOSED_WON.value:
+                changes["closed_at"] = datetime.now(timezone.utc)
         elif changes.get("stage") == OpportunityStage.CLOSED_LOST.value:
             changes["probability"] = 0
+            if previous_stage != OpportunityStage.CLOSED_LOST.value:
+                changes["closed_at"] = datetime.now(timezone.utc)
         elif changes.get("stage"):
             changes["loss_reason"] = None
+            changes["closed_at"] = None
         for key, value in changes.items():
             setattr(opportunity, key, value)
         await self.db.commit()

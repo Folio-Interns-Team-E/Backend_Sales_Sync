@@ -1,7 +1,8 @@
+from datetime import date
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -10,8 +11,25 @@ from app.models.user import User
 from app.schemas.common import ApiResponse
 from app.schemas.opportunities import OpportunityCreate, OpportunityResponse, OpportunitySummary, OpportunityUpdate
 from app.services.opportunities_service import OpportunityService, serialize_opportunity
+from app.services.financial_dashboard_service import FinancialDashboardService
 
 router = APIRouter(prefix="/opportunities", tags=["opportunities"])
+
+
+@router.get("/financial-dashboard", response_model=ApiResponse[dict])
+async def financial_dashboard(
+    from_date: Optional[date] = Query(None),
+    to_date: Optional[date] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    team_ctx: TeamContext = Depends(get_team_context),
+    current_user: User = Depends(get_current_user),
+):
+    if from_date and to_date and from_date > to_date:
+        raise HTTPException(status_code=400, detail="from_date cannot be after to_date")
+    data = await FinancialDashboardService(db).dashboard(
+        team_ctx.team_id, current_user.id, team_ctx.role, from_date, to_date
+    )
+    return ApiResponse(success=True, message="Financial dashboard fetched", data=data)
 
 
 @router.get("/summary", response_model=ApiResponse[OpportunitySummary])
